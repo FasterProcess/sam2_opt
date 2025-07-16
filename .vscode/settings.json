@@ -1,0 +1,8 @@
+{
+    "python.analysis.include": [
+        "sam2"
+    ],
+    "python.analysis.extraPaths": [
+        "sam2"
+    ],
+}
