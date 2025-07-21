@@ -35,7 +35,6 @@ def simplify_and_save(onnx_model, save_path):
         onnx.save(onnx_model, save_path)
 
 
-# --- 导出函数---
 @torch.no_grad()
 def export_image_encoder(onnx_name="video_image_encoder.onnx", simplify_onnx=True, override=False):
     global predictor, onnx_path
@@ -114,27 +113,16 @@ def export_memory_encoder(onnx_name="video_memory_encoder.onnx", simplify_onnx=T
     save_path = os.path.join(onnx_path, onnx_name)
     if os.path.exists(save_path) and not override: return
 
-    # --- 1. 定位到要导出的子模块 ---
     memory_encoder_module = predictor.memory_encoder
 
-    # --- 2. 备份原始的、复杂的 forward 方法 ---
     original_forward = memory_encoder_module.forward
 
-    # --- 3. 【关键】猴子补丁！用我们新的纯净方法替换 forward ---
     memory_encoder_module.forward = memory_encoder_module.inference_memory
 
-    # --- 4. 准备与 inference_memory 方法签名完全匹配的输入 ---
     pixel_features = torch.randn(1, 256, 64, 64, device=device)
-    # 注意：现在 inference_memory 期望的 masks 输入是已经经过 sigmoid 处理的，
-    # 或者说，它期望的是0-1范围的概率图。为了模拟这一点，我们可以用 torch.rand。
-    # 如果原始的 mask_for_memory 是高分辨率的，我们也需要模拟这一点。
-    # 假设 mask_for_memory 是高分辨率的，inference_memory 内部会处理下采样。
     mask_for_memory = torch.rand(1, 1, 1024, 1024, device=device)
     args = (pixel_features, mask_for_memory)
 
-    # --- 5. 执行导出 ---
-    # `torch.onnx.export` 现在会调用我们替换上去的 inference_memory 方法。
-    # 该方法返回一个包含两个张量的元组，这正是我们想要的。
     torch.onnx.export(
         memory_encoder_module,  # 直接导出子模块
         args,                   # 传入匹配的参数
@@ -152,10 +140,8 @@ def export_memory_encoder(onnx_name="video_memory_encoder.onnx", simplify_onnx=T
         }
     )
 
-    # --- 6. 清理现场，恢复原始的 forward 方法 ---
     memory_encoder_module.forward = original_forward
 
-    # --- 7. (可选) 简化模型 ---
     if simplify_onnx:
         simplify_and_save(onnx.load(save_path), save_path.replace(".onnx", "_opt.onnx"))
 

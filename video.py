@@ -14,37 +14,19 @@ from sam2.sam2_video_predictor import SAM2VideoPredictor
 from sam2.build_sam import build_sam2_video_predictor
 
 
-# 【最终修正版 V2】的 draw_mask 函数
 def draw_mask(img, mask, color=[0, 0, 255], alpha=0.6):  # 默认颜色改为红色 BGR
-    """
-    在原图上用半透明颜色绘制掩码。
-    此版本非常健壮，能处理各种维度的输入掩码，并正确处理logits。
-
-    Args:
-        img (np.array): BGR 格式的图像 (H, W, 3), 类型为 np.uint8。
-        mask (np.array): 模型的原始输出掩码 (logits)，可以是多维的。
-        color (list): BGR 格式的颜色, e.g., [Blue, Green, Red]。
-        alpha (float): 掩码的透明度，介于 0.0 和 1.0 之间。
-    """
-    # 1. 确保掩码是二维的 (H, W)
     squeezed_mask = np.squeeze(mask)
     if squeezed_mask.ndim != 2:
         raise ValueError(
             f"无法将输入掩码转换为二维 (H, W) 形状。原始形状: {mask.shape}, squeeze后: {squeezed_mask.shape}")
 
-    # 2. 【关键修正】将 Logits 转换为二进制掩码。只有>0的区域才是前景。
     bool_mask = squeezed_mask > 0
 
-    # 3. 创建输出图像的副本
     out_img = img.copy()
 
-    # 4. 创建一个与原图同尺寸的纯色层
     color_layer = np.zeros_like(out_img, dtype=np.uint8)
-    # 只在为True的区域（即前景）填充颜色
     color_layer[bool_mask] = color
 
-    # 5. 使用 cv2.addWeighted 进行混合
-    # 这个函数要求两个输入图像尺寸完全相同，现在 color_layer 满足这个条件
     out_img = cv2.addWeighted(out_img, 1, color_layer, alpha, 0)
 
     return out_img
@@ -100,8 +82,6 @@ def save_video_masks(
     print("所有帧处理完毕，结果已保存。")
 
 
-# --- 模型和数据准备 ---
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"使用的设备: {device}")
 
@@ -119,7 +99,6 @@ input_label = np.array([1])
 object_id = 1
 
 
-# --- 核心工作流程模拟 (已彻底修正) ---
 
 def run_segmentation(predictor, video_path, frame_idx, obj_id, points=None, labels=None, box=None):
     """
@@ -159,7 +138,6 @@ def run_segmentation(predictor, video_path, frame_idx, obj_id, points=None, labe
     return all_masks
 
 
-# --- 执行并保存结果 ---
 if __name__ == "__main__":
     # --- 模型和数据准备 ---
     start_time = time.perf_counter() # <--- 开始计时
