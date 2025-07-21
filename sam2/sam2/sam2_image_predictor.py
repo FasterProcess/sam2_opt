@@ -126,8 +126,8 @@ class SAM2ImagePredictor:
         # ][::-1]
 
         feats = self.model.inference_image_for_set_image(input_image)
-        for feat in feats:
-            print(f"{feat.shape}")
+        # for feat in feats:
+        #     print(f"{feat.shape}")
         self._features = {"image_embed": feats[-1], "high_res_feats": feats[:-1]}
         self._is_image_set = True
         logging.info("Image embeddings computed.")

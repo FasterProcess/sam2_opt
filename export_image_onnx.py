@@ -34,7 +34,7 @@ def export_forward_image(
     os.makedirs(onnx_path, exist_ok=True)
 
     ori_forward = predictor.model.forward
-    predictor.model.forward = predictor.model.inference_image
+    predictor.model.forward = predictor.model.inference_image_torch
     predictor.model.eval()
 
     save_path = os.path.join(onnx_path, onnx_name)
@@ -94,7 +94,7 @@ def export_image_set_image(
     os.makedirs(onnx_path, exist_ok=True)
 
     ori_forward = predictor.model.forward
-    predictor.model.forward = predictor.model.inference_image_for_set_image
+    predictor.model.forward = predictor.model.inference_image_for_set_image_torch
     predictor.model.eval()
 
     save_path = os.path.join(onnx_path, onnx_name)
