@@ -14,6 +14,7 @@ from sam2.modeling.sam.mask_decoder import MaskDecoder
 from sam2.modeling.sam.prompt_encoder import PromptEncoder
 from sam2.modeling.sam.transformer import TwoWayTransformer
 from sam2.modeling.sam2_utils import get_1d_sine_pe, MLP, select_closest_cond_frames
+from ytools.bench import test_torch_cuda_time
 
 # a large negative value as a placeholder score for missing objects
 NO_OBJ_SCORE = -1024.0
@@ -497,6 +498,7 @@ class SAM2Base(torch.nn.Module):
             *backbone_out["backbone_fpn"],
         )
 
+    @test_torch_cuda_time()
     def inference_image_for_set_image(self, img_batch: torch.Tensor):
         backbone_out = self.forward_image(img_batch)
         _, vision_feats, _, feat_sizes = self._prepare_backbone_features(backbone_out)

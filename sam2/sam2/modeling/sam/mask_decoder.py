@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 from sam2.modeling.sam2_utils import LayerNorm2d, MLP
-
+from ytools.bench import test_torch_cuda_time
 
 class MaskDecoder(nn.Module):
     def __init__(
@@ -224,6 +224,7 @@ class MaskDecoder(nn.Module):
             src, tokens, pos_src, high_res_features[0], high_res_features[1]
         )
 
+    @test_torch_cuda_time()
     def inference_predict_masks(
         self,
         src: torch.Tensor,
