@@ -7,8 +7,8 @@
 | torch                | Large    | 0.149     | 1.0    | 否       |
 | onnxruntime_cuda     | Large    | 0.113     | 1.318  | 否       |
 | onnxruntime_trt      | Large    | 0.080     | 1.863  | 否       |
-| onnxruntime_e2e_cuda | Large    |           |        | 否       |
-| onnxruntime_e2e_trt  | Large    |           |        | 否       |
+| onnxruntime_e2e_cuda | Large    | 0.078     | 1.91   | 否       |
+| onnxruntime_e2e_trt  | Large    | 0.061     | 2.442  | 否       |
 
 
 ## A6000
