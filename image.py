@@ -68,17 +68,29 @@ predictor = SAM2ImagePredictor(sam2_model)
 # speedup default
 # predictor.model.set_runtime_backend(backend="torch")
 
+# predictor.model.set_runtime_backend(
+#     backend="onnxruntime",
+#     args={
+#         "model_paths": [
+#             "models/forward_image_opt.onnx",
+#         ],
+#         "providers": [
+#             "TensorrtExecutionProvider",
+#             "CUDAExecutionProvider",
+#             "CPUExecutionProvider",
+#         ],
+#     },
+# )
 
 # speedup with onnxruntime
-predictor.model.set_runtime_backend(
+predictor.set_runtime_backend(
     backend="onnxruntime",
     args={
         "model_paths": [
-            "models/forward_image_opt.onnx",
-            "models/image_set_image_opt.onnx",
+            "models/set_image_e2e_opt.onnx",
         ],
         "providers": [
-            "TensorrtExecutionProvider",
+            # "TensorrtExecutionProvider",
             "CUDAExecutionProvider",
             "CPUExecutionProvider",
         ],
@@ -88,8 +100,8 @@ predictor.model.set_runtime_backend(
 image = Image.open("./sam2/notebooks/images/truck.jpg")
 image = np.array(image.convert("RGB"))
 
-input_point = np.array([[500, 375]])
-input_label = np.array([1])
+input_point = np.array([[500, 375], [502, 375]])
+input_label = np.array([1, 1])
 
 
 @test_torch_cuda_time()

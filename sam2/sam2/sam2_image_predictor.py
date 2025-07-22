@@ -15,9 +15,13 @@ from PIL.Image import Image
 from sam2.modeling.sam2_base import SAM2Base
 
 from sam2.utils.transforms import SAM2Transforms
+from ytools.bench import test_torch_cuda_time
+from torch import nn
+from ytools.onnxruntime import OnnxRuntimeExecutor
+from ytools.executor import ModelExectuor
 
 
-class SAM2ImagePredictor:
+class SAM2ImagePredictor(nn.Module):
     def __init__(
         self,
         sam_model: SAM2Base,
@@ -65,6 +69,9 @@ class SAM2ImagePredictor:
             (64, 64),
         ]
 
+        self.backend_contexts = []
+        self.set_image_e2e = self.set_image_e2e_torch
+
     @classmethod
     def from_pretrained(cls, model_id: str, **kwargs) -> "SAM2ImagePredictor":
         """
@@ -82,6 +89,7 @@ class SAM2ImagePredictor:
         sam_model = build_sam2_hf(model_id, **kwargs)
         return cls(sam_model, **kwargs)
 
+    @test_torch_cuda_time()
     @torch.no_grad()
     def set_image(
         self,
@@ -104,15 +112,26 @@ class SAM2ImagePredictor:
         elif isinstance(image, Image):
             w, h = image.size
             self._orig_hw = [(h, w)]
+            image = np.array(image)
         else:
             raise NotImplementedError("Image format not supported")
 
-        input_image = self._transforms(image)
-        input_image = input_image[None, ...].to(self.device)
+        # input_image = self._transforms.to_tensor(image)
 
+        # input_image = self._transforms(image)
+        # input_image = input_image[None, ...].to(self.device)
+
+        self._set_image_([image])
+
+    @test_torch_cuda_time()
+    @torch.no_grad()
+    def _set_image_(self, images):
+        images = torch.stack(
+            [torch.from_numpy(image).to(self.device) for image in images]
+        ).movedim(3, 1)
         assert (
-            len(input_image.shape) == 4 and input_image.shape[1] == 3
-        ), f"input_image must be of size 1x3xHxW, got {input_image.shape}"
+            len(images.shape) == 4 and images.shape[1] == 3
+        ), f"input_image must be of size 1x3xHxW, got {images.shape}"
         logging.info("Computing image embeddings for the provided image...")
         # backbone_out = self.model.forward_image(input_image)
         # _, vision_feats, _, _ = self.model._prepare_backbone_features(backbone_out)
@@ -125,12 +144,62 @@ class SAM2ImagePredictor:
         #     for feat, feat_size in zip(vision_feats[::-1], self._bb_feat_sizes[::-1])
         # ][::-1]
 
-        feats = self.model.inference_image_for_set_image(input_image)
+        images = self._transforms.resize(images / 255.0)
+        # feats = self.model.inference_image_for_set_image(images)
+
+        feats = self.set_image_e2e(images)
+
         # for feat in feats:
         #     print(f"{feat.shape}")
         self._features = {"image_embed": feats[-1], "high_res_feats": feats[:-1]}
         self._is_image_set = True
         logging.info("Image embeddings computed.")
+
+    def set_runtime_backend(self, backend="torch", args: dict = None):
+        self.backend_contexts = []
+        if backend.lower() == "torch":
+            self.set_image_e2e = self.set_image_e2e_torch
+        elif backend.lower() == "onnxruntime":
+            assert "model_paths" in args, 'need args["model_paths"] to set *.onnx path'
+
+            model_paths = args["model_paths"]
+            if isinstance(model_paths, str):
+                model_paths = [model_paths]
+
+            if model_paths[0] is None:
+                self.set_image_e2e = self.set_image_e2e_torch
+            else:
+                self.set_image_e2e = self.set_image_e2e_onnxruntime
+                forward_image_executor = OnnxRuntimeExecutor(
+                    model_paths[0], providers=args.get("providers", None)
+                )
+                forward_image_executor.warmup([torch.randn(1, 3, 1024, 1024)])
+                self.backend_contexts.append(forward_image_executor)
+        else:
+            raise Exception(f"unsupported runtime backend={backend}")
+
+    @test_torch_cuda_time()
+    def set_image_e2e_torch(self, img_batch: torch.Tensor):
+        img_batch = self._transforms.norm(img_batch)
+        backbone_out = self.model.forward_image(img_batch)
+        _, vision_feats, _, feat_sizes = self.model._prepare_backbone_features(
+            backbone_out
+        )
+        # Add no_mem_embed, which is added to the lowest rest feat. map during training on videos
+        if self.model.directly_add_no_mem_embed:
+            vision_feats[-1] = vision_feats[-1] + self.model.no_mem_embed
+
+        feats = [
+            feat.permute(1, 2, 0).unflatten(2, feat_size)
+            for feat, feat_size in zip(vision_feats, feat_sizes)
+        ]
+        return feats[0], feats[1], feats[2]
+
+    @test_torch_cuda_time()
+    def set_image_e2e_onnxruntime(self, img_batch: torch.Tensor):
+        outs = self.backend_contexts[0].Inference([img_batch], output_type="torch")
+        outputs = [o.to(img_batch.device) for o in outs]
+        return tuple(outputs)
 
     @torch.no_grad()
     def set_image_batch(
@@ -154,28 +223,30 @@ class SAM2ImagePredictor:
             ), "Images are expected to be an np.ndarray in RGB format, and of shape  HWC"
             self._orig_hw.append(image.shape[:2])
         # Transform the image to the form expected by the model
-        img_batch = self._transforms.forward_batch(image_list)
-        img_batch = img_batch.to(self.device)
-        batch_size = img_batch.shape[0]
-        assert (
-            len(img_batch.shape) == 4 and img_batch.shape[1] == 3
-        ), f"img_batch must be of size Bx3xHxW, got {img_batch.shape}"
-        logging.info("Computing image embeddings for the provided images...")
-        # backbone_out = self.model.forward_image(img_batch)
-        # _, vision_feats, _, _ = self.model._prepare_backbone_features(backbone_out)
-        # # Add no_mem_embed, which is added to the lowest rest feat. map during training on videos
-        # if self.model.directly_add_no_mem_embed:
-        #     vision_feats[-1] = vision_feats[-1] + self.model.no_mem_embed
+        self._set_image_(image_list)
 
-        # feats = [
-        #     feat.permute(1, 2, 0).view(batch_size, -1, *feat_size)
-        #     for feat, feat_size in zip(vision_feats[::-1], self._bb_feat_sizes[::-1])
-        # ][::-1]
-        feats = self.model.inference_image_for_set_image(img_batch)
-        self._features = {"image_embed": feats[-1], "high_res_feats": feats[:-1]}
-        self._is_image_set = True
-        self._is_batch = True
-        logging.info("Image embeddings computed.")
+        # img_batch = self._transforms.forward_batch(image_list)
+        # img_batch = img_batch.to(self.device)
+        # batch_size = img_batch.shape[0]
+        # assert (
+        #     len(img_batch.shape) == 4 and img_batch.shape[1] == 3
+        # ), f"img_batch must be of size Bx3xHxW, got {img_batch.shape}"
+        # logging.info("Computing image embeddings for the provided images...")
+        # # backbone_out = self.model.forward_image(img_batch)
+        # # _, vision_feats, _, _ = self.model._prepare_backbone_features(backbone_out)
+        # # # Add no_mem_embed, which is added to the lowest rest feat. map during training on videos
+        # # if self.model.directly_add_no_mem_embed:
+        # #     vision_feats[-1] = vision_feats[-1] + self.model.no_mem_embed
+
+        # # feats = [
+        # #     feat.permute(1, 2, 0).view(batch_size, -1, *feat_size)
+        # #     for feat, feat_size in zip(vision_feats[::-1], self._bb_feat_sizes[::-1])
+        # # ][::-1]
+        # feats = self.model.inference_image_for_set_image(img_batch)
+        # self._features = {"image_embed": feats[-1], "high_res_feats": feats[:-1]}
+        # self._is_image_set = True
+        # self._is_batch = True
+        # logging.info("Image embeddings computed.")
 
     def predict_batch(
         self,
@@ -239,6 +310,8 @@ class SAM2ImagePredictor:
 
         return all_masks, all_ious, all_low_res_masks
 
+    @test_torch_cuda_time()
+    @torch.no_grad()
     def predict(
         self,
         point_coords: Optional[np.ndarray] = None,
