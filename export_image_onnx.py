@@ -176,8 +176,8 @@ def export_set_image_e2e(
 
 
 @torch.no_grad()
-def export_mask_encoder(
-    onnx_name="image_mask_encoder.onnx", simplify_onnx=True, override=False
+def export_mask_decoder(
+    onnx_name="image_mask_decoder.onnx", simplify_onnx=True, override=False
 ):
     global predictor, onnx_path
     os.makedirs(onnx_path, exist_ok=True)
@@ -281,4 +281,4 @@ def export_mask_encoder(
 
 export_forward_image(override=False)
 export_set_image_e2e(override=True)
-export_mask_encoder(override=False)
+export_mask_decoder(override=False)
