@@ -8,7 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
-from ytools.bench import test_torch_cuda_time
+from ytools.bench import test_time
 import shutil
 
 
@@ -65,23 +65,6 @@ model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
 predictor = SAM2ImagePredictor(sam2_model)
 
-# speedup default
-# predictor.model.set_runtime_backend(backend="torch")
-
-# predictor.model.set_runtime_backend(
-#     backend="onnxruntime",
-#     args={
-#         "model_paths": [
-#             "models/forward_image_opt.onnx",
-#         ],
-#         "providers": [
-#             "TensorrtExecutionProvider",
-#             "CUDAExecutionProvider",
-#             "CPUExecutionProvider",
-#         ],
-#     },
-# )
-
 # speedup with onnxruntime
 predictor.set_runtime_backend(
     backend="onnxruntime",
@@ -97,6 +80,20 @@ predictor.set_runtime_backend(
     },
 )
 
+# predictor.model.sam_mask_decoder.set_runtime_backend(
+#     backend="onnxruntime",
+#     args={
+#         "model_paths": [
+#             "models/image_mask_encoder_opt.onnx",
+#         ],
+#         "providers": [
+#             "TensorrtExecutionProvider",
+#             "CUDAExecutionProvider",
+#             "CPUExecutionProvider",
+#         ],
+#     },
+# )
+
 image = Image.open("./sam2/notebooks/images/truck.jpg")
 image = np.array(image.convert("RGB"))
 
@@ -104,7 +101,7 @@ input_point = np.array([[500, 375], [502, 375]])
 input_label = np.array([1, 1])
 
 
-@test_torch_cuda_time()
+@test_time()
 def run(predictor: SAM2ImagePredictor, image, input_point, input_label):
     predictor.set_image(image)
     masks, scores, logits = predictor.predict(

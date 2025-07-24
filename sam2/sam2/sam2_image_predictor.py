@@ -15,7 +15,7 @@ from PIL.Image import Image
 from sam2.modeling.sam2_base import SAM2Base
 
 from sam2.utils.transforms import SAM2Transforms
-from ytools.bench import test_torch_cuda_time
+from ytools.bench import test_time
 from torch import nn
 from ytools.onnxruntime import OnnxRuntimeExecutor
 from ytools.executor import ModelExectuor
@@ -89,7 +89,7 @@ class SAM2ImagePredictor(nn.Module):
         sam_model = build_sam2_hf(model_id, **kwargs)
         return cls(sam_model, **kwargs)
 
-    @test_torch_cuda_time()
+    @test_time()
     @torch.no_grad()
     def set_image(
         self,
@@ -123,7 +123,6 @@ class SAM2ImagePredictor(nn.Module):
 
         self._set_image_([image])
 
-    @test_torch_cuda_time()
     @torch.no_grad()
     def _set_image_(self, images):
         images = torch.stack(
@@ -178,7 +177,6 @@ class SAM2ImagePredictor(nn.Module):
         else:
             raise Exception(f"unsupported runtime backend={backend}")
 
-    @test_torch_cuda_time()
     def set_image_e2e_torch(self, img_batch: torch.Tensor):
         img_batch = self._transforms.norm(img_batch)
         backbone_out = self.model.forward_image(img_batch)
@@ -195,7 +193,6 @@ class SAM2ImagePredictor(nn.Module):
         ]
         return feats[0], feats[1], feats[2]
 
-    @test_torch_cuda_time()
     def set_image_e2e_onnxruntime(self, img_batch: torch.Tensor):
         outs = self.backend_contexts[0].Inference([img_batch], output_type="torch")
         outputs = [o.to(img_batch.device) for o in outs]
@@ -310,7 +307,6 @@ class SAM2ImagePredictor(nn.Module):
 
         return all_masks, all_ious, all_low_res_masks
 
-    @test_torch_cuda_time()
     @torch.no_grad()
     def predict(
         self,
