@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 import torch
 from tqdm import tqdm
+from sam2.sam2_video_predictor import SAM2VideoPredictor
 from sam2.build_sam import build_sam2_video_predictor
 
 
@@ -92,75 +93,90 @@ if __name__ == "__main__":
     model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
     print("Building and loading SAM2VideoPredictor model...")
-    predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, device=device)
+    predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, device=device) # type:SAM2VideoPredictor
     print("Model loaded.")
 
     # --- 2. Backend Configuration ---
 
     # Option A: Default PyTorch backend
-    # print("\n--- Using PyTorch backend ---")
-    # predictor.set_runtime_backend(backend="torch")
+    print("\n--- Using PyTorch backend ---")
+    predictor.set_runtime_backend(backend="torch")
 
     # Option B: ONNX Runtime backend 
-    print("\n--- Using ONNX Runtime backend ---")
-    # Configure onnx paths
-    onnx_paths ={
-        "video_image_encoder": "models/forward_image_opt.onnx",
-        "video_prompt_encoder": "models/video_prompt_encoder_opt.onnx",
-        "video_mask_decoder": "models/image_mask_decoder_opt.onnx",
-        "video_memory_encoder": "models/video_memory_encoder_opt.onnx"
-    }
+    # print("\n--- Using ONNX Runtime backend ---")
+    # # Configure onnx paths
+    # onnx_paths ={
+    #     "video_image_encoder": "models/forward_image_opt.onnx",
+    #     "video_prompt_encoder": "models/video_prompt_encoder_opt.onnx",
+    #     "video_mask_decoder": "models/image_mask_decoder_opt.onnx",
+    #     "video_memory_encoder": "models/video_memory_encoder_opt.onnx",
+    #     "video_memory_attention": "models/memory_attention_opt.onnx", # <-- new
+    # }
+    # # --- new ---
+    # print("\n--- Set video_memory_attention backend ---")
+    # # memory_attention 是 SAM2Base 的一个属性，可以通过 predictor 访问
+    # predictor.memory_attention.set_runtime_backend(
+    #     backend="onnxruntime",
+    #     args={
+    #         "model_paths": [onnx_paths["video_memory_attention"]],
+    #         "providers": [
+    #             "TensorrtExecutionProvider",                                    
+    #             "CUDAExecutionProvider",
+    #             "CPUExecutionProvider",
+    #         ],
+    #     },
+    # )
 
-    print("\n--- Set video_image_encoder backend ---")
-    predictor.set_runtime_backend(
-        backend="onnxruntime",
-        args={
-            "model_paths": [onnx_paths["video_image_encoder"]],
-            "providers": [
-                "TensorrtExecutionProvider",
-                "CUDAExecutionProvider",
-                "CPUExecutionProvider",
-            ],
-        },
-    )
-    print("\n--- Set video_mask_decoder backend ---")
-    predictor.sam_mask_decoder.set_runtime_backend(
-        backend="onnxruntime",
-        args={
-            "model_paths": [onnx_paths["video_mask_decoder"]],
-            "providers": [
-                "TensorrtExecutionProvider",
-                "CUDAExecutionProvider",
-                "CPUExecutionProvider",
-            ],
-        },
-    )
-    print("\n--- Set video_prompt_encoder backend ---")
-    predictor.sam_prompt_encoder.set_runtime_backend(
-        backend="onnxruntime",
-        args={
-            "model_paths": [onnx_paths["video_prompt_encoder"]],
-            "providers": [
-                "TensorrtExecutionProvider",
-                "CUDAExecutionProvider",
-                "CPUExecutionProvider",
-            ],
-        },
-    )
+    # print("\n--- Set video_image_encoder backend ---")
+    # predictor.set_runtime_backend(
+    #     backend="onnxruntime",
+    #     args={
+    #         "model_paths": [onnx_paths["video_image_encoder"]],
+    #         "providers": [
+    #             "TensorrtExecutionProvider",
+    #             "CUDAExecutionProvider",
+    #             "CPUExecutionProvider",
+    #         ],
+    #     },
+    # )
+    # print("\n--- Set video_mask_decoder backend ---")
+    # predictor.sam_mask_decoder.set_runtime_backend(
+    #     backend="onnxruntime",
+    #     args={
+    #         "model_paths": [onnx_paths["video_mask_decoder"]],
+    #         "providers": [
+    #             "TensorrtExecutionProvider",
+    #             "CUDAExecutionProvider",
+    #             "CPUExecutionProvider",
+    #         ],
+    #     },
+    # )
+    # print("\n--- Set video_prompt_encoder backend ---")
+    # predictor.sam_prompt_encoder.set_runtime_backend(
+    #     backend="onnxruntime",
+    #     args={
+    #         "model_paths": [onnx_paths["video_prompt_encoder"]],
+    #         "providers": [
+    #             "TensorrtExecutionProvider",
+    #             "CUDAExecutionProvider",
+    #             "CPUExecutionProvider",
+    #         ],
+    #     },
+    # )
 
-    print("\n--- Set video_memory_encoder backend ---")
-    predictor.memory_encoder.set_runtime_backend(
-        backend="onnxruntime",
-        args={
-            "model_paths": [onnx_paths["video_memory_encoder"]],
-            "providers": [
-                "TensorrtExecutionProvider",                                    
-                "CUDAExecutionProvider",
-                "CPUExecutionProvider",
-            ],
-        },
-    )
-    print("Successfully set onnxruntime_backend")
+    # print("\n--- Set video_memory_encoder backend ---")
+    # predictor.memory_encoder.set_runtime_backend(
+    #     backend="onnxruntime",
+    #     args={
+    #         "model_paths": [onnx_paths["video_memory_encoder"]],
+    #         "providers": [
+    #             "TensorrtExecutionProvider",                                    
+    #             "CUDAExecutionProvider",
+    #             "CPUExecutionProvider",
+    #         ],
+    #     },
+    # )
+    # print("Successfully set onnxruntime_backend")
 
     # --- 3. Run Inference ---
     video_path = "./sam2/notebooks/videos/bedroom.mp4"
@@ -177,13 +193,13 @@ if __name__ == "__main__":
     #     points=input_points, labels=input_labels, box=input_box
     # )
     # --- 1: Multi-point input (foreground + background) ---
-    # print("Test Mode: Multi-point input")
-    # input_points = np.array([[257, 176], [235, 286]])  # Foreground point + Background point
-    # input_labels = np.array([1, 0])  # Foreground label + Background label
-    # final_masks = run_segmentation(
-    #     predictor, video_path, initial_frame_idx, object_id,
-    #     points=input_points, labels=input_labels
-    # )
+    print("Test Mode: Multi-point input")
+    input_points = np.array([[257, 176], [235, 286]])  # Foreground point + Background point
+    input_labels = np.array([1, 0])  # Foreground label + Background label
+    final_masks = run_segmentation(
+        predictor, video_path, initial_frame_idx, object_id,
+        points=input_points, labels=input_labels
+    )
 
     # --- 2: Bounding box input ---
     # print("Test Mode: Bounding box input")
@@ -194,14 +210,14 @@ if __name__ == "__main__":
     # )
 
     # --- 3: Bounding box + one foreground point ---
-    print("Test Mode: Bounding box + Foreground point")
-    input_points = np.array([[257, 176]]) # Point on the child
-    input_labels = np.array([1])
-    input_box = np.array([161, 138, 291, 415]) # Box roughly enclosing the child
-    final_masks = run_segmentation(
-        predictor, video_path, initial_frame_idx, object_id,
-        points=input_points, labels=input_labels, box=input_box
-    )
+    # print("Test Mode: Bounding box + Foreground point")
+    # input_points = np.array([[257, 176]]) # Point on the child
+    # input_labels = np.array([1])
+    # input_box = np.array([161, 138, 291, 415]) # Box roughly enclosing the child
+    # final_masks = run_segmentation(
+    #     predictor, video_path, initial_frame_idx, object_id,
+    #     points=input_points, labels=input_labels, box=input_box
+    # )
 
     # --- 4. Save Results and Timing ---
     save_video_masks(video_path, final_masks, output_fold="data/test_video")
