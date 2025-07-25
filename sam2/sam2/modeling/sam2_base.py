@@ -17,6 +17,7 @@ from sam2.modeling.sam2_utils import get_1d_sine_pe, MLP, select_closest_cond_fr
 from ytools.bench import test_torch_cuda_time
 from ytools.onnxruntime import OnnxRuntimeExecutor
 from ytools.executor import ModelExectuor
+from ytools.tensorrt import TensorRTExecutor
 from typing import List
 
 # a large negative value as a placeholder score for missing objects
@@ -207,12 +208,12 @@ class SAM2Base(torch.nn.Module):
         self.backend_contexts = []
         if backend.lower() == "torch":
             self.inference_image = self.inference_image_torch
-        elif backend.lower() == "onnxruntime":
+        elif backend.lower() in ["onnxruntime", "ort", "onnxrt"]:
             assert "model_paths" in args, 'need args["model_paths"] to set *.onnx path'
 
             model_paths = args["model_paths"]
             if isinstance(model_paths, str):
-                model_paths = [model_paths, None]
+                model_paths = [model_paths]
 
             # image_encoder
             if model_paths[0] is None:
@@ -222,6 +223,23 @@ class SAM2Base(torch.nn.Module):
                 forward_image_executor = OnnxRuntimeExecutor(
                     model_paths[0], providers=args.get("providers", None)
                 )
+                forward_image_executor.warmup([torch.randn(1, 3, 1024, 1024)])
+                self.backend_contexts.append(forward_image_executor)
+        elif backend.lower() in ["tensorrt", "trt"]:
+            assert (
+                "model_paths" in args
+            ), 'need args["model_paths"] to set *.engine path'
+
+            model_paths = args["model_paths"]
+            if isinstance(model_paths, str):
+                model_paths = [model_paths]
+
+            # image_encoder
+            if model_paths[0] is None:
+                self.inference_image = self.inference_image_torch
+            else:
+                self.inference_image = self.inference_image_tensorrt
+                forward_image_executor = TensorRTExecutor(model_paths[0])
                 forward_image_executor.warmup([torch.randn(1, 3, 1024, 1024)])
                 self.backend_contexts.append(forward_image_executor)
         else:
@@ -538,6 +556,14 @@ class SAM2Base(torch.nn.Module):
     def inference_image_onnxruntime(self, img_batch: torch.Tensor):
         """
         onnxruntime version call by self.forward_image
+        """
+        outs = self.backend_contexts[0].Inference([img_batch], output_type="torch")
+        outputs = [o.to(img_batch.device) for o in outs]
+        return tuple(outputs)
+
+    def inference_image_tensorrt(self, img_batch: torch.Tensor):
+        """
+        tensorrt version call by self.forward_image
         """
         outs = self.backend_contexts[0].Inference([img_batch], output_type="torch")
         outputs = [o.to(img_batch.device) for o in outs]

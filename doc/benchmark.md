@@ -31,5 +31,6 @@
 | onnxruntime_trt      | Large    | 0.079     | 1.164  | 否       |
 | onnxruntime_e2e_cuda | Large    | 0.083     | 1.108  | 否       |
 | onnxruntime_e2e_trt  | Large    | 0.065     | 1.415  | 否       |
+| onnxruntime_e2e_trt  | Large    | 0.024     | 3.833  | int8     |
 
 # Video

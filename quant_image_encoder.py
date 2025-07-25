@@ -76,5 +76,5 @@ def quant_forward_image_engine():
 
 
 if __name__ == "__main__":
-    # quant_set_image_e2e_engine()
-    quant_forward_image_engine()
+    quant_set_image_e2e_engine()
+    # quant_forward_image_engine()

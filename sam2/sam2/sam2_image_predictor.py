@@ -18,6 +18,7 @@ from sam2.utils.transforms import SAM2Transforms
 from ytools.bench import test_time
 from torch import nn
 from ytools.onnxruntime import OnnxRuntimeExecutor
+from ytools.tensorrt import TensorRTExecutor
 from ytools.executor import ModelExectuor
 
 
@@ -69,7 +70,7 @@ class SAM2ImagePredictor(nn.Module):
             (64, 64),
         ]
 
-        self.backend_contexts = []
+        self.backend_contexts = []  # type: List[ModelExectuor]
         self.set_image_e2e = self.set_image_e2e_torch
 
     @classmethod
@@ -158,7 +159,7 @@ class SAM2ImagePredictor(nn.Module):
         self.backend_contexts = []
         if backend.lower() == "torch":
             self.set_image_e2e = self.set_image_e2e_torch
-        elif backend.lower() == "onnxruntime":
+        elif backend.lower() in ["onnxruntime", "ort", "onnxrt"]:
             assert "model_paths" in args, 'need args["model_paths"] to set *.onnx path'
 
             model_paths = args["model_paths"]
@@ -172,6 +173,22 @@ class SAM2ImagePredictor(nn.Module):
                 forward_image_executor = OnnxRuntimeExecutor(
                     model_paths[0], providers=args.get("providers", None)
                 )
+                forward_image_executor.warmup([torch.randn(1, 3, 1024, 1024)])
+                self.backend_contexts.append(forward_image_executor)
+        elif backend.lower() in ["tensorrt", "trt"]:
+            assert (
+                "model_paths" in args
+            ), 'need args["model_paths"] to set *.engine path'
+
+            model_paths = args["model_paths"]
+            if isinstance(model_paths, str):
+                model_paths = [model_paths]
+
+            if model_paths[0] is None:
+                self.set_image_e2e = self.set_image_e2e_torch
+            else:
+                self.set_image_e2e = self.set_image_e2e_tensorrt
+                forward_image_executor = TensorRTExecutor(model_paths[0])
                 forward_image_executor.warmup([torch.randn(1, 3, 1024, 1024)])
                 self.backend_contexts.append(forward_image_executor)
         else:
@@ -194,6 +211,11 @@ class SAM2ImagePredictor(nn.Module):
         return feats[0], feats[1], feats[2]
 
     def set_image_e2e_onnxruntime(self, img_batch: torch.Tensor):
+        outs = self.backend_contexts[0].Inference([img_batch], output_type="torch")
+        outputs = [o.to(img_batch.device) for o in outs]
+        return tuple(outputs)
+
+    def set_image_e2e_tensorrt(self, img_batch: torch.Tensor):
         outs = self.backend_contexts[0].Inference([img_batch], output_type="torch")
         outputs = [o.to(img_batch.device) for o in outs]
         return tuple(outputs)

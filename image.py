@@ -1,7 +1,6 @@
 import sys
 
 sys.path.insert(0, "sam2")
-
 import os
 import numpy as np
 import torch
@@ -53,12 +52,16 @@ def save_masks(
 device = torch.device("cuda")
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
+import torch
+
+torch.randn((1, 1), device="cuda:0")
+
 
 # large
 sam2_checkpoint = "./sam2/checkpoints/sam2.1_hiera_large.pt"
 model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
-# # # tiny
+# tiny
 # sam2_checkpoint = "./sam2/checkpoints/sam2.1_hiera_tiny.pt"
 # model_cfg = "configs/sam2.1/sam2.1_hiera_t.yaml"
 
@@ -66,19 +69,46 @@ sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
 predictor = SAM2ImagePredictor(sam2_model)
 
 # speedup with onnxruntime
+# predictor.set_runtime_backend(
+#     backend="onnxruntime",
+#     args={
+#         "model_paths": [
+#             "models/set_image_e2e_opt.onnx",
+#         ],
+#         "providers": [
+#             # "TensorrtExecutionProvider",
+#             "CUDAExecutionProvider",
+#             "CPUExecutionProvider",
+#         ],
+#     },
+# )
+
 predictor.set_runtime_backend(
-    backend="onnxruntime",
+    backend="tensorrt",
     args={
         "model_paths": [
-            "models/set_image_e2e_opt.onnx",
-        ],
-        "providers": [
-            # "TensorrtExecutionProvider",
-            "CUDAExecutionProvider",
-            "CPUExecutionProvider",
-        ],
+            "models/engine/set_image_e2e_opt.engine",
+        ]
     },
 )
+
+# predictor.model.set_runtime_backend(
+#     backend="tensorrt",
+#     args={
+#         "model_paths": [
+#             "models/engine/forward_image_opt.engine",
+#         ]
+#     },
+# )
+
+# predictor.model.set_runtime_backend(
+#     backend="onnxruntime",
+#     args={
+#         "model_paths": [
+#             "models/forward_image_opt.onnx",
+#         ]
+#     },
+# )
 
 # predictor.model.sam_mask_decoder.set_runtime_backend(
 #     backend="onnxruntime",
