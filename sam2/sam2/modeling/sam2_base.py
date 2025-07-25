@@ -214,6 +214,7 @@ class SAM2Base(torch.nn.Module):
             if isinstance(model_paths, str):
                 model_paths = [model_paths, None]
 
+            # image_encoder
             if model_paths[0] is None:
                 self.inference_image = self.inference_image_torch
             else:

@@ -11,6 +11,9 @@ from torch import nn
 
 from sam2.modeling.sam2_utils import LayerNorm2d, MLP
 from ytools.bench import test_torch_cuda_time
+from ytools.onnxruntime import OnnxRuntimeExecutor
+from ytools.executor import ModelExectuor
+
 
 class MaskDecoder(nn.Module):
     def __init__(
@@ -107,6 +110,11 @@ class MaskDecoder(nn.Module):
         self.dynamic_multimask_stability_delta = dynamic_multimask_stability_delta
         self.dynamic_multimask_stability_thresh = dynamic_multimask_stability_thresh
 
+        self.backend_contexts = []  # type:List[ModelExectuor]
+        self.inference_predict_masks = self.inference_predict_masks_torch
+
+        self.set_runtime_backend(backend="torch")
+
     def forward(
         self,
         image_embeddings: torch.Tensor,
@@ -175,13 +183,6 @@ class MaskDecoder(nn.Module):
         high_res_features: Optional[List[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
-        # Concatenate output tokens
-        print(f"@predict_masks")
-        print(f"{image_embeddings.shape} {image_embeddings.dtype}")
-        print(f"{image_pe.shape} {image_pe.dtype}")
-        print(f"{sparse_prompt_embeddings.shape} {sparse_prompt_embeddings.dtype}")
-        print(f"{dense_prompt_embeddings.shape} {dense_prompt_embeddings.dtype}")
-        
         s = 0
         if self.pred_obj_scores:
             output_tokens = torch.cat(
@@ -224,8 +225,39 @@ class MaskDecoder(nn.Module):
             src, tokens, pos_src, high_res_features[0], high_res_features[1]
         )
 
+    def set_runtime_backend(self, backend="torch", args: dict = None):
+        self.backend_contexts = []
+        if backend.lower() == "torch":
+            self.inference_predict_masks = self.inference_predict_masks_torch
+        elif backend.lower() == "onnxruntime":
+            assert "model_paths" in args, 'need args["model_paths"] to set *.onnx path'
+
+            model_paths = args["model_paths"]
+            if isinstance(model_paths, str):
+                model_paths = [model_paths, None]
+
+            if model_paths[0] is None:
+                self.inference_predict_masks = self.inference_predict_masks_torch
+            else:
+                self.inference_predict_masks = self.inference_predict_masks_onnxruntime
+                forward_image_executor = OnnxRuntimeExecutor(
+                    model_paths[0], providers=args.get("providers", None)
+                )
+                forward_image_executor.warmup(
+                    [
+                        torch.randn(1, 256, 64, 64),
+                        torch.randn(1, 9, 256),
+                        torch.randn(1, 256, 64, 64),
+                        torch.randn(1, 32, 256, 256),
+                        torch.randn(1, 64, 128, 128),
+                    ]
+                )
+                self.backend_contexts.append(forward_image_executor)
+        else:
+            raise Exception(f"unsupported")
+
     @test_torch_cuda_time()
-    def inference_predict_masks(
+    def inference_predict_masks_torch(
         self,
         src: torch.Tensor,
         tokens: torch.Tensor,
@@ -234,13 +266,6 @@ class MaskDecoder(nn.Module):
         high_res_feature1: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
-        print(f"@inference_predict_masks")
-        print(f"{src.shape} {src.dtype}")
-        print(f"{tokens.shape} {tokens.dtype}")
-        print(f"{pos_src.shape} {pos_src.dtype}")
-        print(f"{high_res_feature0.shape} {high_res_feature0.dtype}")
-        print(f"{high_res_feature1.shape} {high_res_feature1.dtype}")
-
         b, c, h, w = src.shape
         s = 0
         if self.pred_obj_scores:
@@ -278,22 +303,32 @@ class MaskDecoder(nn.Module):
             # Obj scores logits - default to 10.0, i.e. assuming the object is present, sigmoid(10)=1
             object_score_logits = 10.0 * iou_pred.new_ones(iou_pred.shape[0], 1)
 
-
-        print(f"output @inference_predict_masks")
-        print(f"{masks.shape} {masks.dtype}")
-        print(f"{iou_pred.shape} {iou_pred.dtype}")
-        print(f"{mask_tokens_out.shape} {mask_tokens_out.dtype}")
-        print(f"{object_score_logits.shape} {object_score_logits.dtype}")
-        
-        '''
+        """
         output @inference_predict_masks
         torch.Size([1, 4, 256, 256]) torch.float32
         torch.Size([1, 4]) torch.float32
         torch.Size([1, 4, 256]) torch.float32
         torch.Size([1, 1]) torch.float32
-        '''
-        
+        """
+
         return masks, iou_pred, mask_tokens_out, object_score_logits
+
+    @test_torch_cuda_time()
+    def inference_predict_masks_onnxruntime(
+        self,
+        src: torch.Tensor,
+        tokens: torch.Tensor,
+        pos_src: torch.Tensor,
+        high_res_feature0: torch.Tensor,
+        high_res_feature1: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Predicts masks. See 'forward' for more details."""
+        outs = self.backend_contexts[0].Inference(
+            [src, tokens, pos_src, high_res_feature0, high_res_feature1],
+            output_type="torch",
+        )
+        outputs = [o.to(src.device) for o in outs]
+        return tuple(outputs)
 
     def _get_stability_scores(self, mask_logits):
         """

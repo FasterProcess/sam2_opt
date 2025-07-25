@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Optional, Tuple, Type
+from typing import Optional, Tuple, Type, List
 
 import torch
 from torch import nn
@@ -12,6 +12,10 @@ from torch import nn
 from sam2.modeling.position_encoding import PositionEmbeddingRandom
 
 from sam2.modeling.sam2_utils import LayerNorm2d
+
+from ytools.bench import test_torch_cuda_time
+from ytools.executor import ModelExectuor
+from ytools.onnxruntime import OnnxRuntimeExecutor
 
 
 class PromptEncoder(nn.Module):
@@ -64,6 +68,43 @@ class PromptEncoder(nn.Module):
             nn.Conv2d(mask_in_chans, embed_dim, kernel_size=1),
         )
         self.no_mask_embed = nn.Embedding(1, embed_dim)
+        # --- Added: Backend switching logic initialization ---
+        self.backend_contexts: List[ModelExectuor] = []
+        self.inference_prompt = self.inference_prompt_torch
+        self.set_runtime_backend(backend="torch")
+
+    def set_runtime_backend(self, backend="torch", args: dict = None):
+        """
+        Dynamically sets the runtime backend for the PromptEncoder (torch or onnxruntime).
+        """
+        self.backend_contexts = []
+        if backend.lower() == "torch":
+            self.inference_prompt = self.inference_prompt_torch
+        elif backend.lower() == "onnxruntime":
+            self.inference_prompt = self.inference_prompt_onnxruntime
+            assert args and "model_paths" in args, "The 'model_paths' argument is required to specify the ONNX model path"
+
+            model_path = args["model_paths"][0]  # PromptEncoder only needs one model
+            providers = args.get("providers", None)
+            executor = OnnxRuntimeExecutor(model_path, providers=providers)
+
+            print(f"Warming up ONNX Runtime for PromptEncoder ({model_path})...")
+            try:
+                warmup_device = torch.device("cuda" if torch.cuda.is_available() and "CUDAExecutionProvider" in (
+                            providers or ["CUDAExecutionProvider"]) else "cpu")
+                points_coords_warmup = torch.randint(0, 1024, (1, 2, 2), dtype=torch.float, device=warmup_device)
+                points_labels_warmup = torch.tensor([[1, 0]], dtype=torch.int32, device=warmup_device)
+
+                # The input for the ONNX model is a flattened list of tensors
+                warmup_inputs = [points_coords_warmup, points_labels_warmup]
+                executor.warmup(warmup_inputs)
+                print("PromptEncoder warmup successful.")
+            except Exception as e:
+                print(f"[Warning] PromptEncoder ONNX warmup failed: {e}")
+
+            self.backend_contexts.append(executor)
+        else:
+            raise ValueError(f"Unsupported backend: {backend}")
 
     def get_dense_pe(self) -> torch.Tensor:
         """
@@ -163,27 +204,14 @@ class PromptEncoder(nn.Module):
         boxes: Optional[torch.Tensor],
         masks: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Embeds different types of prompts, returning both sparse and dense
-        embeddings.
+        return self.inference_prompt(points, boxes, masks)
+       
 
-        Arguments:
-          points (tuple(torch.Tensor, torch.Tensor) or none): point coordinates
-            and labels to embed.
-          boxes (torch.Tensor or none): boxes to embed
-          masks (torch.Tensor or none): masks to embed
-
-        Returns:
-          torch.Tensor: sparse embeddings for the points and boxes, with shape
-            BxNx(embed_dim), where N is determined by the number of input points
-            and boxes.
-          torch.Tensor: dense embeddings for the masks, in the shape
-            Bx(embed_dim)x(embed_H)x(embed_W)
-        """
+# --- Added: PyTorch version of the core logic ---
+    @test_torch_cuda_time()
+    def inference_prompt_torch(self, points, boxes, masks) -> Tuple[torch.Tensor, torch.Tensor]:
         bs = self._get_batch_size(points, boxes, masks)
-        sparse_embeddings = torch.empty(
-            (bs, 0, self.embed_dim), device=self._get_device()
-        )
+        sparse_embeddings = torch.empty((bs, 0, self.embed_dim), device=self._get_device())
         if points is not None:
             coords, labels = points
             point_embeddings = self._embed_points(coords, labels, pad=(boxes is None))
@@ -191,12 +219,28 @@ class PromptEncoder(nn.Module):
         if boxes is not None:
             box_embeddings = self._embed_boxes(boxes)
             sparse_embeddings = torch.cat([sparse_embeddings, box_embeddings], dim=1)
-
         if masks is not None:
             dense_embeddings = self._embed_masks(masks)
         else:
-            dense_embeddings = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(
-                bs, -1, self.image_embedding_size[0], self.image_embedding_size[1]
-            )
-
+            dense_embeddings = self.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(bs, -1,
+                                                                                     self.image_embedding_size[0],
+                                                                                     self.image_embedding_size[1])
         return sparse_embeddings, dense_embeddings
+
+
+    @test_torch_cuda_time()
+    def inference_prompt_onnxruntime(self, points, boxes, masks) -> Tuple[torch.Tensor, torch.Tensor]:
+        assert boxes is None, "ONNX backend for PromptEncoder does not support 'boxes' directly. Convert them to points."
+        assert masks is None, "ONNX backend for PromptEncoder does not support 'masks' directly. It's designed for point prompts."
+
+        executor = self.backend_contexts[0]
+        device = self._get_device()
+
+        point_coords, point_labels = points
+        inputs = [point_coords, point_labels]
+
+        outputs = executor.Inference(inputs, output_type="torch")
+
+        sparse_embeddings, dense_embeddings = outputs[0], outputs[1]
+
+        return sparse_embeddings.to(device), dense_embeddings.to(device)
