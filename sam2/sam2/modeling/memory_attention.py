@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from torch import nn, Tensor
@@ -12,6 +12,9 @@ from torch import nn, Tensor
 from sam2.modeling.sam.transformer import RoPEAttention
 
 from sam2.modeling.sam2_utils import get_activation_fn, get_clones
+from ytools.bench import test_torch_cuda_time
+from ytools.executor import ModelExectuor
+from ytools.onnxruntime import OnnxRuntimeExecutor
 
 
 class MemoryAttentionLayer(nn.Module):
@@ -115,14 +118,82 @@ class MemoryAttention(nn.Module):
         self.norm = nn.LayerNorm(d_model)
         self.pos_enc_at_input = pos_enc_at_input
         self.batch_first = batch_first
+        # --- new ---
+        self.backend_contexts: List[ModelExectuor] = []
+        self.inference_memory_attention = self.inference_memory_attention_torch
+        self.set_runtime_backend(backend="torch")
 
+    def set_runtime_backend(self, backend="torch", args: dict = None):
+        """
+        Dynamically sets the runtime backend for MemoryAttention (torch or onnxruntime).
+        """
+        self.backend_contexts = []
+        if backend.lower() == "torch":
+            self.inference_memory_attention = self.inference_memory_attention_torch
+            print("MemoryAttention backend set to: torch")
+        elif backend.lower() == "onnxruntime":
+            self.inference_memory_attention = self.inference_memory_attention_onnxruntime
+            assert args and "model_paths" in args, "The 'model_paths' argument is required to specify the ONNX model path"
+
+            model_path = args["model_paths"][0]
+            providers = args.get("providers", None)
+            executor = OnnxRuntimeExecutor(model_path, providers=providers)
+            
+            print(f"Warming up ONNX Runtime for MemoryAttention ({model_path})...")
+            try:
+                warmup_device = torch.device("cuda" if torch.cuda.is_available() and "CUDAExecutionProvider" in (providers or []) else "cpu")
+
+                B = 1
+                HW = 4096
+                C = 256
+                C_mem = 64
+
+                curr_warmup = torch.randn(HW, B, C, device=warmup_device)
+                curr_pos_warmup = torch.randn(HW, B, C, device=warmup_device)
+
+                # 4100-28736
+                min_mem_len = 4100
+                max_mem_len = 28736
+
+                for mem_len in [min_mem_len, max_mem_len]:
+                    if min_mem_len == max_mem_len and mem_len != min_mem_len: continue
+
+                    print(f"Warming up for memory_length = {mem_len}...")
+                    memory_warmup = torch.randn(mem_len, B, C_mem, device=warmup_device)
+                    memory_pos_warmup = torch.randn(mem_len, B, C_mem, device=warmup_device)
+                    warmup_inputs = [curr_warmup, curr_pos_warmup, memory_warmup, memory_pos_warmup]
+                    executor.warmup(warmup_inputs)
+
+                print("MemoryAttention warmup successful.")
+            except Exception as e:
+                print(f"[Warning] MemoryAttention ONNX warmup failed: {e}")
+
+            self.backend_contexts.append(executor)
+            print("MemoryAttention backend set to: onnxruntime")
+        else:
+            raise ValueError(f"Unsupported backend: {backend}")
+
+    # --- 3. 将 forward 变成调度器 ---
     def forward(
         self,
-        curr: torch.Tensor,  # self-attention inputs
-        memory: torch.Tensor,  # cross-attention inputs
-        curr_pos: Optional[Tensor] = None,  # pos_enc for self-attention inputs
-        memory_pos: Optional[Tensor] = None,  # pos_enc for cross-attention inputs
-        num_obj_ptr_tokens: int = 0,  # number of object pointer *tokens*
+        curr: torch.Tensor,
+        memory: torch.Tensor,
+        curr_pos: Optional[Tensor] = None,
+        memory_pos: Optional[Tensor] = None,
+        num_obj_ptr_tokens: int = 0,
+    ):
+        # 调用 self.inference_attention, 它会根据设置指向 torch 或 onnx 的实现
+        return self.inference_memory_attention(curr, memory, curr_pos, memory_pos, num_obj_ptr_tokens)
+
+    @test_torch_cuda_time()
+    # --- 4. 创建 Torch 实现 (原始 forward 逻辑) ---
+    def inference_memory_attention_torch(
+        self,
+        curr: torch.Tensor,
+        memory: torch.Tensor,
+        curr_pos: Optional[Tensor] = None,
+        memory_pos: Optional[Tensor] = None,
+        num_obj_ptr_tokens: int = 0,
     ):
         if isinstance(curr, list):
             assert isinstance(curr_pos, list)
@@ -141,7 +212,6 @@ class MemoryAttention(nn.Module):
             output = output + 0.1 * curr_pos
 
         if self.batch_first:
-            # Convert to batch first
             output = output.transpose(0, 1)
             curr_pos = curr_pos.transpose(0, 1)
             memory = memory.transpose(0, 1)
@@ -162,8 +232,40 @@ class MemoryAttention(nn.Module):
         normed_output = self.norm(output)
 
         if self.batch_first:
-            # Convert back to seq first
             normed_output = normed_output.transpose(0, 1)
-            curr_pos = curr_pos.transpose(0, 1)
+            # curr_pos = curr_pos.transpose(0, 1) # This line was in your original code but seems unused
 
         return normed_output
+
+    @test_torch_cuda_time()
+    def inference_memory_attention_onnxruntime(
+        self,
+        curr: torch.Tensor,
+        memory: torch.Tensor,
+        curr_pos: Optional[Tensor] = None,
+        memory_pos: Optional[Tensor] = None,
+        num_obj_ptr_tokens: int = 0, 
+    ):
+        if isinstance(curr, list):
+            assert isinstance(curr_pos, list)
+            assert len(curr) == len(curr_pos) == 1
+            curr, curr_pos = curr[0], curr_pos[0]
+        
+        executor = self.backend_contexts[0]
+        print(f"[DEBUG] ONNX Runtime Input Shapes: "
+            f"curr={curr.shape}, "
+            f"memory={memory.shape}")
+
+        inputs = [
+            curr.float(), 
+            curr_pos.float(), 
+            memory.float(), 
+            memory_pos.float(), 
+        ]
+        
+
+        outputs = executor.Inference(inputs, output_type="torch")
+        
+        image_embed_onnx = outputs[0]
+        
+        return image_embed_onnx.to(curr.device)
