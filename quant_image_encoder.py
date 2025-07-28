@@ -6,7 +6,7 @@ os.makedirs("models/engine", exist_ok=True)
 
 
 def quant_set_image_e2e_engine():
-    calibration_dataset_path = "datasets/image"
+    calibration_dataset_path = "datasets/image/mini_batch"
 
     input_model_path = "models/set_image_e2e_opt.onnx"
     output_model_path = "models/engine/set_image_e2e_opt.engine"
@@ -18,7 +18,7 @@ def quant_set_image_e2e_engine():
         input_shapes=[(-1, 3, 1024, 1024)],
         batch_size=1,
         skip_frame=1,
-        dataset_limit=1000,
+        dataset_limit=2000,
         do_norm=False,
     )
     calibrator = MyEntropyCalibrator(
@@ -41,7 +41,7 @@ def quant_set_image_e2e_engine():
 
 
 def quant_forward_image_engine():
-    calibration_dataset_path = "datasets/image"
+    calibration_dataset_path = "datasets/image/mini_batch"
 
     input_model_path = "models/forward_image_opt.onnx"
     output_model_path = "models/engine/forward_image_opt.engine"
@@ -53,7 +53,7 @@ def quant_forward_image_engine():
         input_shapes=[(-1, 3, 1024, 1024)],
         batch_size=1,
         skip_frame=1,
-        dataset_limit=1000,
+        dataset_limit=2000,
         do_norm=True,
     )
     calibrator = MyEntropyCalibrator(
@@ -77,4 +77,4 @@ def quant_forward_image_engine():
 
 if __name__ == "__main__":
     quant_set_image_e2e_engine()
-    # quant_forward_image_engine()
+    quant_forward_image_engine()
