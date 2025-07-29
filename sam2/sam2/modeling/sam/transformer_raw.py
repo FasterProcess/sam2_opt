@@ -273,7 +273,11 @@ class RoPEAttention(Attention):
         self.rope_k_repeat = rope_k_repeat
 
     def forward(
-        self, q: Tensor, k: Tensor, v: Tensor, num_k_exclude_rope: int = 0
+        self,
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        num_k_exclude_rope: Tensor = torch.tensor([0], dtype=torch.int32),
     ) -> Tensor:
         # Input projections
         q = self.q_proj(q)

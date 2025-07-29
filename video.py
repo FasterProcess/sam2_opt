@@ -22,7 +22,8 @@ def draw_mask(img, mask, color=[0, 0, 255], alpha=0.6):
     squeezed_mask = np.squeeze(mask)
     if squeezed_mask.ndim != 2:
         raise ValueError(
-            f"Cannot convert input mask to a 2D (H, W) shape. Original shape: {mask.shape}, after squeeze: {squeezed_mask.shape}")
+            f"Cannot convert input mask to a 2D (H, W) shape. Original shape: {mask.shape}, after squeeze: {squeezed_mask.shape}"
+        )
     bool_mask = squeezed_mask > 0
     out_img = img.copy()
     color_layer = np.zeros_like(out_img, dtype=np.uint8)
@@ -44,7 +45,8 @@ def save_video_masks(video_path, masks_dict, output_fold="data/test_video"):
     pbar = tqdm(total=total_frames, desc="Saving video frames")
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
         if frame_idx in masks_dict:
             mask = masks_dict[frame_idx]
             masked_frame = draw_mask(frame.copy(), mask)
@@ -60,7 +62,15 @@ def save_video_masks(video_path, masks_dict, output_fold="data/test_video"):
 
 
 @test_torch_cuda_time()
-def run_segmentation(predictor, video_path, frame_idx, obj_id, points=None, labels=None, box=None):
+def run_segmentation(
+    predictor: SAM2VideoPredictor,
+    video_path,
+    frame_idx,
+    obj_id,
+    points=None,
+    labels=None,
+    box=None,
+):
     print("Step 1: Initializing inference state...")
     inference_state = predictor.init_state(video_path)
     print(f"Step 2: Adding initial prompt at frame {frame_idx}...")
@@ -70,7 +80,7 @@ def run_segmentation(predictor, video_path, frame_idx, obj_id, points=None, labe
         obj_id=obj_id,
         points=points,
         labels=labels,
-        box=box
+        box=box,
     )
     initial_mask = masks_out[0:1, ...].cpu().numpy()
     all_masks = {frame_idx_out: initial_mask}
@@ -84,25 +94,61 @@ def run_segmentation(predictor, video_path, frame_idx, obj_id, points=None, labe
 
 
 if __name__ == "__main__":
-
-    # --- 1. Model and Data Preparation ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
     sam2_checkpoint = "./sam2/checkpoints/sam2.1_hiera_large.pt"
     model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
-    print("Building and loading SAM2VideoPredictor model...")
-    predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint, device=device) # type:SAM2VideoPredictor
-    print("Model loaded.")
+    # sam2_checkpoint = "./sam2/checkpoints/sam2.1_hiera_tiny.pt"
+    # model_cfg = "configs/sam2.1/sam2.1_hiera_t.yaml"
 
-    # --- 2. Backend Configuration ---
+    predictor = build_sam2_video_predictor(
+        model_cfg, sam2_checkpoint, device=device
+    )  # type:SAM2VideoPredictor
 
-    # Option A: Default PyTorch backend
-    print("\n--- Using PyTorch backend ---")
-    predictor.set_runtime_backend(backend="torch")
+    # use torch
+    # predictor.set_runtime_backend(backend="torch")
 
-    # Option B: ONNX Runtime backend 
+    # # use onnxruntime
+    # predictor.set_runtime_backend(
+    #     backend="onnxruntime",
+    #     args={
+    #         "model_paths": [
+    #             "models/forward_image_opt.onnx",
+    #         ],
+    #         "providers": [
+    #             "TensorrtExecutionProvider",
+    #             "CUDAExecutionProvider",
+    #             "CPUExecutionProvider",
+    #         ],
+    #     },
+    # )
+
+    predictor.set_runtime_backend(
+        backend="tensorrt",
+        args={
+            "model_paths": [
+                "models/forward_image_opt.onnx",
+            ],
+            "build_args": {
+                "dynamic_axes": {"image": {"min": {0: 1}, "opt": {0: 1}, "max": {0: 1}}}
+            },
+        },
+    )
+
+    # predictor.memory_attention.set_runtime_backend(
+    #     backend="onnxruntime",
+    #     args={
+    #         "model_paths": ["models/memory_attention.onnx"],
+    #         "providers": [
+    #             "TensorrtExecutionProvider",
+    #             "CUDAExecutionProvider",
+    #             "CPUExecutionProvider",
+    #         ],
+    #     },
+    # )
+
+    # Option B: ONNX Runtime backend
     # print("\n--- Using ONNX Runtime backend ---")
     # # Configure onnx paths
     # onnx_paths ={
@@ -120,7 +166,7 @@ if __name__ == "__main__":
     #     args={
     #         "model_paths": [onnx_paths["video_memory_attention"]],
     #         "providers": [
-    #             "TensorrtExecutionProvider",                                    
+    #             "TensorrtExecutionProvider",
     #             "CUDAExecutionProvider",
     #             "CPUExecutionProvider",
     #         ],
@@ -170,7 +216,7 @@ if __name__ == "__main__":
     #     args={
     #         "model_paths": [onnx_paths["video_memory_encoder"]],
     #         "providers": [
-    #             "TensorrtExecutionProvider",                                    
+    #             "TensorrtExecutionProvider",
     #             "CUDAExecutionProvider",
     #             "CPUExecutionProvider",
     #         ],
@@ -194,11 +240,17 @@ if __name__ == "__main__":
     # )
     # --- 1: Multi-point input (foreground + background) ---
     print("Test Mode: Multi-point input")
-    input_points = np.array([[257, 176], [235, 286]])  # Foreground point + Background point
+    input_points = np.array(
+        [[257, 176], [235, 286]]
+    )  # Foreground point + Background point
     input_labels = np.array([1, 0])  # Foreground label + Background label
     final_masks = run_segmentation(
-        predictor, video_path, initial_frame_idx, object_id,
-        points=input_points, labels=input_labels
+        predictor,
+        video_path,
+        initial_frame_idx,
+        object_id,
+        points=input_points,
+        labels=input_labels,
     )
 
     # --- 2: Bounding box input ---

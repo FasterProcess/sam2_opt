@@ -188,7 +188,9 @@ class SAM2ImagePredictor(nn.Module):
                 self.set_image_e2e = self.set_image_e2e_torch
             else:
                 self.set_image_e2e = self.set_image_e2e_tensorrt
-                forward_image_executor = TensorRTExecutor(model_paths[0])
+                forward_image_executor = TensorRTExecutor(
+                    model_paths[0], build_args=args.get("build_args", {})
+                )
                 forward_image_executor.warmup([torch.randn(1, 3, 1024, 1024)])
                 self.backend_contexts.append(forward_image_executor)
         else:

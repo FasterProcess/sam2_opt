@@ -280,5 +280,5 @@ def export_mask_decoder(
 
 
 export_forward_image(override=False)
-export_set_image_e2e(override=True)
+export_set_image_e2e(override=False)
 export_mask_decoder(override=False)

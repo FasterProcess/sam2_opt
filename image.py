@@ -68,61 +68,17 @@ model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
 predictor = SAM2ImagePredictor(sam2_model)
 
-# speedup with onnxruntime
-# predictor.set_runtime_backend(
-#     backend="onnxruntime",
-#     args={
-#         "model_paths": [
-#             "models/set_image_e2e_opt.onnx",
-#         ],
-#         "providers": [
-#             # "TensorrtExecutionProvider",
-#             "CUDAExecutionProvider",
-#             "CPUExecutionProvider",
-#         ],
-#     },
-# )
-
 predictor.set_runtime_backend(
     backend="tensorrt",
     args={
         "model_paths": [
-            "models/engine/set_image_e2e_opt.engine",
-        ]
+            "models/set_image_e2e_opt.onnx",
+        ],
+        "build_args": {
+            "dynamic_axes": {"image": {"min": {0: 1}, "opt": {0: 1}, "max": {0: 1}}}
+        },
     },
 )
-
-# predictor.model.set_runtime_backend(
-#     backend="tensorrt",
-#     args={
-#         "model_paths": [
-#             "models/engine/forward_image_opt.engine",
-#         ]
-#     },
-# )
-
-# predictor.model.set_runtime_backend(
-#     backend="onnxruntime",
-#     args={
-#         "model_paths": [
-#             "models/forward_image_opt.onnx",
-#         ]
-#     },
-# )
-
-# predictor.model.sam_mask_decoder.set_runtime_backend(
-#     backend="onnxruntime",
-#     args={
-#         "model_paths": [
-#             "models/image_mask_encoder_opt.onnx",
-#         ],
-#         "providers": [
-#             "TensorrtExecutionProvider",
-#             "CUDAExecutionProvider",
-#             "CPUExecutionProvider",
-#         ],
-#     },
-# )
 
 image = Image.open("./sam2/notebooks/images/truck.jpg")
 image = np.array(image.convert("RGB"))
@@ -140,14 +96,6 @@ def run(predictor: SAM2ImagePredictor, image, input_point, input_label):
         multimask_output=True,
     )
 
-    # predictor.set_image(image)
-    # masks, scores, logits = predictor.predict(
-    #     point_coords=np.array([[575, 750]]),
-    #     point_labels=np.array([0]),
-    #     box=np.array([425, 600, 700, 875]),
-    #     multimask_output=True,
-    # )
-
     sorted_ind = np.argsort(scores)[::-1]
     masks = masks[sorted_ind]
     scores = scores[sorted_ind]
@@ -158,9 +106,3 @@ def run(predictor: SAM2ImagePredictor, image, input_point, input_label):
 for _ in range(10):
     masks, scores = run(predictor, image, input_point, input_label)
 save_masks(image, masks, scores, "data/test_image")
-
-
-# torch: Large: 0.149s, tiny: 0.050s
-# onnxruntime_cuda: Large: 0.113s
-# onnxruntime_trt: Large: 0.080s
-# onnxruntime_e2e: Large: 0.063s

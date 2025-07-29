@@ -21,6 +21,8 @@
 | onnxruntime_trt      | Large    | 0.172     | 1.488  | 否       |
 | onnxruntime_e2e_cuda | Large    | 0.137     | 1.869  | 否       |
 | onnxruntime_e2e_trt  | Large    | 0.117     | 2.188  | 否       |
+| tensorrt_e2e         | Large    | 0.060     | 4.266  | fp16     |
+| tensorrt_e2e         | Large    | 0.056     | 4.571  | int8     |
 
 ## RTX4090
 | 推理方式             | 模型类型 | 耗时（s） | 加速比 | 是否量化 |
@@ -31,6 +33,6 @@
 | onnxruntime_trt      | Large    | 0.079     | 1.164  | 否       |
 | onnxruntime_e2e_cuda | Large    | 0.083     | 1.108  | 否       |
 | onnxruntime_e2e_trt  | Large    | 0.065     | 1.415  | 否       |
-| onnxruntime_e2e_trt  | Large    | 0.024     | 3.833  | int8     |
+| tensorrt             | Large    | 0.024     | 3.833  | int8     |
 
 # Video

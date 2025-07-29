@@ -25,6 +25,11 @@ class PositionEmbeddingSine(nn.Module):
         temperature: int = 10000,
         normalize: bool = True,
         scale: Optional[float] = None,
+        # Following settings only relevant
+        # for warmping up cache for compilation
+        warmup_cache: bool = True,
+        image_size: int = 1024,
+        strides: Tuple[int] = (4, 8, 16, 32),
     ):
         super().__init__()
         assert num_pos_feats % 2 == 0, "Expecting even model width"
@@ -38,6 +43,12 @@ class PositionEmbeddingSine(nn.Module):
         self.scale = scale
 
         self.cache = {}
+        if warmup_cache and torch.cuda.is_available():
+            # Warmup cache for cuda, to help with compilation
+            device = torch.device("cuda")
+            for stride in strides:
+                cache_key = (image_size // stride, image_size // stride)
+                self._pe(1, device, *cache_key)
 
     def _encode_xy(self, x, y):
         # The positions are expected to be normalized
@@ -76,19 +87,20 @@ class PositionEmbeddingSine(nn.Module):
         return pos
 
     @torch.no_grad()
-    def forward(self, x: torch.Tensor):
-        cache_key = (x.shape[-2], x.shape[-1])
+    def _pe(self, B, device, *cache_key):
+        H, W = cache_key
         if cache_key in self.cache:
-            return self.cache[cache_key][None].repeat(x.shape[0], 1, 1, 1)
+            return self.cache[cache_key].to(device)[None].repeat(B, 1, 1, 1)
+
         y_embed = (
-            torch.arange(1, x.shape[-2] + 1, dtype=torch.float32, device=x.device)
+            torch.arange(1, H + 1, dtype=torch.float32, device=device)
             .view(1, -1, 1)
-            .repeat(x.shape[0], 1, x.shape[-1])
+            .repeat(B, 1, W)
         )
         x_embed = (
-            torch.arange(1, x.shape[-1] + 1, dtype=torch.float32, device=x.device)
+            torch.arange(1, W + 1, dtype=torch.float32, device=device)
             .view(1, 1, -1)
-            .repeat(x.shape[0], x.shape[-2], 1)
+            .repeat(B, H, 1)
         )
 
         if self.normalize:
@@ -96,7 +108,7 @@ class PositionEmbeddingSine(nn.Module):
             y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
             x_embed = x_embed / (x_embed[:, :, -1:] + eps) * self.scale
 
-        dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
+        dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=device)
         dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
 
         pos_x = x_embed[:, :, :, None] / dim_t
@@ -110,6 +122,12 @@ class PositionEmbeddingSine(nn.Module):
         pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
         self.cache[cache_key] = pos[0]
         return pos
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor):
+        B = x.shape[0]
+        cache_key = (x.shape[-2], x.shape[-1])
+        return self._pe(B, x.device, *cache_key)
 
 
 class PositionEmbeddingRandom(nn.Module):
@@ -163,84 +181,59 @@ class PositionEmbeddingRandom(nn.Module):
 # 2. https://github.com/naver-ai/rope-vit
 # 3. https://github.com/lucidrains/rotary-embedding-torch
 
-def init_t_xy(end_x: int, end_y: int, device=None):
-    t = torch.arange(end_x * end_y, dtype=torch.float32, device=device)
+
+def init_t_xy(end_x: int, end_y: int):
+    t = torch.arange(end_x * end_y, dtype=torch.float32)
     t_x = (t % end_x).float()
     t_y = torch.div(t, end_x, rounding_mode="floor").float()
     return t_x, t_y
 
-def compute_axial_rope_cos_sin(dim: int, end_x: int, end_y: int, theta: float = 10000.):
-    # dim: 需要能被4整除
-    assert dim % 2 == 0
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+
+def compute_axial_cis(dim: int, end_x: int, end_y: int, theta: float = 10000.0):
+    freqs_x = 1.0 / (theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim))
+    freqs_y = 1.0 / (theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim))
+
     t_x, t_y = init_t_xy(end_x, end_y)
-    freqs_x = torch.outer(t_x, freqs)  # [end_x*end_y, dim//2]
-    freqs_y = torch.outer(t_y, freqs)  # [end_x*end_y, dim//2]
-    # 拼在一起
-    freqs = torch.cat([freqs_x, freqs_y], dim=-1)  # [seq_len, dim]
-    cos = freqs.cos()
-    sin = freqs.sin()
-    return cos, sin  # [seq_len, dim]
+    freqs_x = torch.outer(t_x, freqs_x)
+    freqs_y = torch.outer(t_y, freqs_y)
+    freqs_cis_x = torch.polar(torch.ones_like(freqs_x), freqs_x)
+    freqs_cis_y = torch.polar(torch.ones_like(freqs_y), freqs_y)
+    return torch.cat([freqs_cis_x, freqs_cis_y], dim=-1)
 
-def reshape_for_broadcast(param, x):
-    # param: [seq_len, dim], x: [..., seq_len, dim]
-    # reshape param为[1, ..., seq_len, dim]
+
+def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
-    shape = [1]*(ndim-2) + list(param.shape)
-    return param.view(*shape)
-
-def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
-    # x: [B, n_head, seq_len, head_dim]  head_dim必须是偶数
-    # cos/sin: [seq_len, head_dim]
-    # 广播到x形状
-    while cos.ndim < x.ndim:
-        cos = cos.unsqueeze(0)
-        sin = sin.unsqueeze(0)
-    x1, x2 = x[..., ::2], x[..., 1::2]
-    cos, sin = cos[..., ::2], sin[..., ::2]
-    x_out_even = x1 * cos - x2 * sin
-    x_out_odd  = x1 * sin + x2 * cos
-    x_out = torch.stack([x_out_even, x_out_odd], dim=-1)
-    x_out = x_out.flatten(-2)  # 恢复到原始最后一维
-    return x_out
+    assert 0 <= 1 < ndim
+    assert freqs_cis.shape == (x.shape[-2], x.shape[-1])
+    shape = [d if i >= ndim - 2 else 1 for i, d in enumerate(x.shape)]
+    return freqs_cis.view(*shape)
 
 
-
-# Matrix version of rotary enc
-# https://github.com/facebookresearch/segment-anything-2/issues/186
-
-def get_rotation_matrices(dim, end_x, end_y, theta=10000.0, device=None, dtype=None):
-    
-    powers = torch.linspace(0, 1, 1 + (dim // 4), device=device, dtype=dtype)[:-1]
-    base_angles = torch.pow(theta, -powers)
-
-    end_x, end_y = int(end_x), int(end_y)
-    x_mults = torch.arange(end_x, device=device, dtype=dtype).repeat(end_y)
-    y_mults = torch.arange(end_y, device=device, dtype=dtype).repeat_interleave(end_x)
-    angles_xy = (torch.outer(mults, base_angles) for mults in (x_mults, y_mults))
-    
-    rotmats_list = []
-    for angles in angles_xy:
-        sterm, cterm = torch.sin(-angles), torch.cos(-angles)
-        rotmat = torch.stack(
-            [
-                torch.stack([cterm, -sterm], dim=-1),
-                torch.stack([sterm, cterm], dim=-1),
-            ],
-            dim=-1,
-        )
-        rotmats_list.append(rotmat)
-
-    return torch.cat(rotmats_list, dim=1).unsqueeze(0).unsqueeze(0)
-
-
-def apply_rotary_matenc(xq, xk, rotmats, repeat_freqs_k=False):
-    
-    bq, hq, nq, cq = xq.shape
-    bk, hk, nk, ck = xk.shape
-
-    q_out = torch.matmul(rotmats, xq.reshape(bq, hq, nq, cq // 2, 2, 1)).flatten(3)
-    k_rotmat = rotmats.repeat(1, 1, nk // nq, 1, 1, 1) if repeat_freqs_k else rotmats
-    k_out = torch.matmul(k_rotmat, xk.reshape(bk, hk, nk, ck // 2, 2, 1)).flatten(3)
-
-    return q_out, k_out
+def apply_rotary_enc(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    freqs_cis: torch.Tensor,
+    repeat_freqs_k: bool = False,
+):
+    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+    xk_ = (
+        torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+        if xk.shape[-2] != 0
+        else None
+    )
+    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
+    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+    if xk_ is None:
+        # no keys to rotate, due to dropout
+        return xq_out.type_as(xq).to(xq.device), xk
+    # repeat freqs along seq_len dim to match k seq_len
+    if repeat_freqs_k:
+        r = xk_.shape[-2] // xq_.shape[-2]
+        if freqs_cis.is_cuda:
+            freqs_cis = freqs_cis.repeat(*([1] * (freqs_cis.ndim - 2)), r, 1)
+        else:
+            # torch.repeat on complex numbers may not be supported on non-CUDA devices
+            # (freqs_cis has 4 dims and we repeat on dim 2) so we use expand + flatten
+            freqs_cis = freqs_cis.unsqueeze(2).expand(-1, -1, r, -1, -1).flatten(2, 3)
+    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+    return xq_out.type_as(xq).to(xq.device), xk_out.type_as(xk).to(xk.device)

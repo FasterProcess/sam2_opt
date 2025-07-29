@@ -66,11 +66,24 @@ class MemoryAttentionLayer(nn.Module):
         tgt = tgt + self.dropout1(tgt2)
         return tgt
 
-    def _forward_ca(self, tgt, memory, query_pos, pos, num_k_exclude_rope=0):
+    def _forward_ca(
+        self,
+        tgt,
+        memory,
+        query_pos,
+        pos,
+        num_k_exclude_rope: Tensor = torch.tensor([0], dtype=torch.int32),
+    ):
         kwds = {}
-        if num_k_exclude_rope > 0:
-            assert isinstance(self.cross_attn_image, RoPEAttention)
+        if isinstance(self.cross_attn_image, RoPEAttention):
+            num_k_exclude_rope = torch.where(
+                num_k_exclude_rope > 0, num_k_exclude_rope, 0
+            )
             kwds = {"num_k_exclude_rope": num_k_exclude_rope}
+
+        # if num_k_exclude_rope > 0:
+        #     assert isinstance(self.cross_attn_image, RoPEAttention)
+        #     kwds = {"num_k_exclude_rope": num_k_exclude_rope}
 
         # Cross-Attention
         tgt2 = self.norm2(tgt)
@@ -89,7 +102,7 @@ class MemoryAttentionLayer(nn.Module):
         memory,
         pos: Optional[Tensor] = None,
         query_pos: Optional[Tensor] = None,
-        num_k_exclude_rope: int = 0,
+        num_k_exclude_rope: Tensor = torch.tensor([0], dtype=torch.int32),
     ) -> torch.Tensor:
 
         # Self-Attn, Cross-Attn
@@ -130,64 +143,41 @@ class MemoryAttention(nn.Module):
         self.backend_contexts = []
         if backend.lower() == "torch":
             self.inference_memory_attention = self.inference_memory_attention_torch
-            print("MemoryAttention backend set to: torch")
         elif backend.lower() == "onnxruntime":
-            self.inference_memory_attention = self.inference_memory_attention_onnxruntime
-            assert args and "model_paths" in args, "The 'model_paths' argument is required to specify the ONNX model path"
+            self.inference_memory_attention = (
+                self.inference_memory_attention_onnxruntime
+            )
+            assert (
+                args and "model_paths" in args
+            ), "The 'model_paths' argument is required to specify the ONNX model path"
 
             model_path = args["model_paths"][0]
             providers = args.get("providers", None)
             executor = OnnxRuntimeExecutor(model_path, providers=providers)
-            
-            print(f"Warming up ONNX Runtime for MemoryAttention ({model_path})...")
-            try:
-                warmup_device = torch.device("cuda" if torch.cuda.is_available() and "CUDAExecutionProvider" in (providers or []) else "cpu")
 
-                B = 1
-                HW = 4096
-                C = 256
-                C_mem = 64
+            curr_warmup = torch.randn(4096, 1, 256)
+            curr_pos_warmup = torch.randn(4096, 1, 256)
+            num_obj_ptr_tokens_warmup = torch.tensor([64], dtype=torch.int32)
 
-                curr_warmup = torch.randn(HW, B, C, device=warmup_device)
-                curr_pos_warmup = torch.randn(HW, B, C, device=warmup_device)
+            # 4100-28736
+            MIN_MEM_LEN = 4100
+            MAX_MEM_LEN = 28736
 
-                # 4100-28736
-                min_mem_len = 4100
-                max_mem_len = 28736
-
-                for mem_len in [min_mem_len, max_mem_len]:
-                    if min_mem_len == max_mem_len and mem_len != min_mem_len: continue
-
-                    print(f"Warming up for memory_length = {mem_len}...")
-                    memory_warmup = torch.randn(mem_len, B, C_mem, device=warmup_device)
-                    memory_pos_warmup = torch.randn(mem_len, B, C_mem, device=warmup_device)
-                    warmup_inputs = [curr_warmup, curr_pos_warmup, memory_warmup, memory_pos_warmup]
-                    executor.warmup(warmup_inputs)
-
-                print("MemoryAttention warmup successful.")
-            except Exception as e:
-                print(f"[Warning] MemoryAttention ONNX warmup failed: {e}")
+            for mem_len in [MIN_MEM_LEN, MAX_MEM_LEN]:
+                warmup_inputs = [
+                    curr_warmup,
+                    torch.randn(mem_len, 1, 64),
+                    curr_pos_warmup,
+                    torch.randn(mem_len, 1, 64),
+                    num_obj_ptr_tokens_warmup,
+                ]
+                executor.warmup(warmup_inputs)
 
             self.backend_contexts.append(executor)
-            print("MemoryAttention backend set to: onnxruntime")
         else:
             raise ValueError(f"Unsupported backend: {backend}")
 
-    # --- 3. 将 forward 变成调度器 ---
     def forward(
-        self,
-        curr: torch.Tensor,
-        memory: torch.Tensor,
-        curr_pos: Optional[Tensor] = None,
-        memory_pos: Optional[Tensor] = None,
-        num_obj_ptr_tokens: int = 0,
-    ):
-        # 调用 self.inference_attention, 它会根据设置指向 torch 或 onnx 的实现
-        return self.inference_memory_attention(curr, memory, curr_pos, memory_pos, num_obj_ptr_tokens)
-
-    @test_torch_cuda_time()
-    # --- 4. 创建 Torch 实现 (原始 forward 逻辑) ---
-    def inference_memory_attention_torch(
         self,
         curr: torch.Tensor,
         memory: torch.Tensor,
@@ -207,6 +197,24 @@ class MemoryAttention(nn.Module):
             curr.shape[1] == memory.shape[1]
         ), "Batch size must be the same for curr and memory"
 
+        if not isinstance(num_obj_ptr_tokens, Tensor):
+            num_obj_ptr_tokens = torch.tensor([num_obj_ptr_tokens], dtype=torch.int32)
+
+        return self.inference_memory_attention(
+            curr, memory, curr_pos, memory_pos, num_obj_ptr_tokens
+        )
+
+    @test_torch_cuda_time()
+    # --- 4. 创建 Torch 实现 (原始 forward 逻辑) ---
+    def inference_memory_attention_torch(
+        self,
+        curr: torch.Tensor,
+        memory: torch.Tensor,
+        curr_pos: Optional[Tensor] = None,
+        memory_pos: Optional[Tensor] = None,
+        num_obj_ptr_tokens: Tensor = torch.tensor([0], dtype=torch.float32),
+    ):
+
         output = curr
         if self.pos_enc_at_input and curr_pos is not None:
             output = output + 0.1 * curr_pos
@@ -220,7 +228,7 @@ class MemoryAttention(nn.Module):
         for layer in self.layers:
             kwds = {}
             if isinstance(layer.cross_attn_image, RoPEAttention):
-                kwds = {"num_k_exclude_rope": num_obj_ptr_tokens}
+                kwds = {"num_k_exclude_rope": num_obj_ptr_tokens.to(dtype=torch.int32)}
 
             output = layer(
                 tgt=output,
@@ -244,28 +252,11 @@ class MemoryAttention(nn.Module):
         memory: torch.Tensor,
         curr_pos: Optional[Tensor] = None,
         memory_pos: Optional[Tensor] = None,
-        num_obj_ptr_tokens: int = 0, 
+        num_obj_ptr_tokens: Tensor = torch.tensor([0], dtype=torch.int32),
     ):
-        if isinstance(curr, list):
-            assert isinstance(curr_pos, list)
-            assert len(curr) == len(curr_pos) == 1
-            curr, curr_pos = curr[0], curr_pos[0]
-        
-        executor = self.backend_contexts[0]
-        print(f"[DEBUG] ONNX Runtime Input Shapes: "
-            f"curr={curr.shape}, "
-            f"memory={memory.shape}")
-
-        inputs = [
-            curr.float(), 
-            curr_pos.float(), 
-            memory.float(), 
-            memory_pos.float(), 
-        ]
-        
-
-        outputs = executor.Inference(inputs, output_type="torch")
-        
-        image_embed_onnx = outputs[0]
-        
-        return image_embed_onnx.to(curr.device)
+        print(f"")
+        outputs = self.backend_contexts[0].Inference(
+            [curr, memory, curr_pos, memory_pos, num_obj_ptr_tokens],
+            output_type="torch",
+        )
+        return outputs[0].to(curr.device)
