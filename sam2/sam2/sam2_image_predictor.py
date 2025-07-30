@@ -17,6 +17,7 @@ from sam2.modeling.sam2_base import SAM2Base
 from sam2.utils.transforms import SAM2Transforms
 from torch import nn
 from ytools.executor import ModelExectuor
+import os
 
 
 class SAM2ImagePredictor(nn.Module):
@@ -87,7 +88,7 @@ class SAM2ImagePredictor(nn.Module):
         sam_model = build_sam2_hf(model_id, **kwargs)
         return cls(sam_model, **kwargs)
 
-    def speedup(self, backend="tensorrt", use_cache=True):
+    def speedup(self, backend="tensorrt", use_cache=True, model_root_path=None):
         """
         only support for large model version
 
@@ -95,6 +96,11 @@ class SAM2ImagePredictor(nn.Module):
 
         backend=="torch" means raw code
         """
+        if model_root_path is None:
+            model_root_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/opts"
+            )
+
         if backend in ["torch"]:
             self.set_runtime_backend(backend="torch")
         elif backend in ["onnxruntime", "ort", "onnxrt"]:
@@ -102,7 +108,7 @@ class SAM2ImagePredictor(nn.Module):
                 backend="onnxruntime",
                 args={
                     "model_paths": [
-                        "models/set_image_e2e_opt.onnx",
+                        os.path.join(model_root_path, "set_image_e2e_opt.onnx")
                     ],
                     "providers": [
                         "CUDAExecutionProvider",
@@ -115,7 +121,7 @@ class SAM2ImagePredictor(nn.Module):
                 backend="tensorrt",
                 args={
                     "model_paths": [
-                        "models/set_image_e2e_opt.onnx",
+                        os.path.join(model_root_path, "set_image_e2e_opt.onnx")
                     ],
                     "build_args": {
                         "dynamic_axes": {
@@ -200,6 +206,7 @@ class SAM2ImagePredictor(nn.Module):
             assert "model_paths" in args, 'need args["model_paths"] to set *.onnx path'
 
             from ytools.onnxruntime import OnnxRuntimeExecutor
+
             model_paths = args["model_paths"]
             if isinstance(model_paths, str):
                 model_paths = [model_paths]
@@ -218,7 +225,7 @@ class SAM2ImagePredictor(nn.Module):
                 "model_paths" in args
             ), 'need args["model_paths"] to set *.engine path'
             from ytools.tensorrt import TensorRTExecutor
-            
+
             model_paths = args["model_paths"]
             if isinstance(model_paths, str):
                 model_paths = [model_paths]

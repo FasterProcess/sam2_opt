@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
 from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames
+import os
 
 
 class SAM2VideoPredictor(SAM2Base):
@@ -38,7 +39,7 @@ class SAM2VideoPredictor(SAM2Base):
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
         self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
 
-    def speedup(self, backend="tensorrt", use_cache=True):
+    def speedup(self, backend="tensorrt", use_cache=True, model_root_path=None):
         """
         only support for large model version
 
@@ -46,6 +47,11 @@ class SAM2VideoPredictor(SAM2Base):
 
         backend=="torch" means raw code
         """
+        if model_root_path is None:
+            model_root_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/opts"
+            )
+
         if backend in ["torch"]:
             self.set_runtime_backend(backend="torch")
         elif backend in ["onnxruntime", "ort", "onnxrt"]:
@@ -53,7 +59,7 @@ class SAM2VideoPredictor(SAM2Base):
                 backend="onnxruntime",
                 args={
                     "model_paths": [
-                        "models/forward_image_opt.onnx",
+                        os.path.join(model_root_path, "forward_image_opt.onnx")
                     ],
                     "providers": [
                         "CUDAExecutionProvider",
@@ -66,8 +72,10 @@ class SAM2VideoPredictor(SAM2Base):
                 backend="onnxruntime",
                 args={
                     "model_paths": [
-                        "models/memory_attention_none_opt.onnx",
-                        "models/memory_attention_exclude_opt.onnx",
+                        os.path.join(model_root_path, "memory_attention_none_opt.onnx"),
+                        os.path.join(
+                            model_root_path, "memory_attention_exclude_opt.onnx"
+                        ),
                     ],
                     "providers": [
                         "CUDAExecutionProvider",
@@ -80,7 +88,7 @@ class SAM2VideoPredictor(SAM2Base):
                 backend="tensorrt",
                 args={
                     "model_paths": [
-                        "models/forward_image_opt.onnx",
+                        os.path.join(model_root_path, "forward_image_opt.onnx"),
                     ],
                     "build_args": {
                         "dynamic_axes": {
@@ -95,8 +103,10 @@ class SAM2VideoPredictor(SAM2Base):
                 backend="tensorrt",
                 args={
                     "model_paths": [
-                        "models/memory_attention_none_opt.onnx",
-                        "models/memory_attention_exclude_opt.onnx",
+                        os.path.join(model_root_path, "memory_attention_none_opt.onnx"),
+                        os.path.join(
+                            model_root_path, "memory_attention_exclude_opt.onnx"
+                        ),
                     ],
                     "build_args": {
                         "dynamic_axes": {
