@@ -106,47 +106,7 @@ if __name__ == "__main__":
         model_cfg, sam2_checkpoint, device=device
     )  # type:SAM2VideoPredictor
 
-    # use torch
-    # predictor.set_runtime_backend(backend="torch")
-
-    # # use onnxruntime
-    # predictor.set_runtime_backend(
-    #     backend="onnxruntime",
-    #     args={
-    #         "model_paths": [
-    #             "models/forward_image_opt.onnx",
-    #         ],
-    #         "providers": [
-    #             "TensorrtExecutionProvider",
-    #             "CUDAExecutionProvider",
-    #             "CPUExecutionProvider",
-    #         ],
-    #     },
-    # )
-
-    predictor.set_runtime_backend(
-        backend="tensorrt",
-        args={
-            "model_paths": [
-                "models/forward_image_opt.onnx",
-            ],
-            "build_args": {
-                "dynamic_axes": {"image": {"min": {0: 1}, "opt": {0: 1}, "max": {0: 1}}}
-            },
-        },
-    )
-
-    # predictor.memory_attention.set_runtime_backend(
-    #     backend="onnxruntime",
-    #     args={
-    #         "model_paths": ["models/memory_attention.onnx"],
-    #         "providers": [
-    #             "TensorrtExecutionProvider",
-    #             "CUDAExecutionProvider",
-    #             "CPUExecutionProvider",
-    #         ],
-    #     },
-    # )
+    predictor.speedup("trt")
 
     # Option B: ONNX Runtime backend
     # print("\n--- Using ONNX Runtime backend ---")

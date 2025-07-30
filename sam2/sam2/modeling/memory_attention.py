@@ -12,9 +12,7 @@ from torch import nn, Tensor
 from sam2.modeling.sam.transformer import RoPEAttention
 
 from sam2.modeling.sam2_utils import get_activation_fn, get_clones
-from ytools.bench import test_torch_cuda_time
 from ytools.executor import ModelExectuor
-from ytools.onnxruntime import OnnxRuntimeExecutor
 
 
 class MemoryAttentionLayer(nn.Module):
@@ -72,27 +70,23 @@ class MemoryAttentionLayer(nn.Module):
         memory,
         query_pos,
         pos,
-        num_k_exclude_rope: Tensor = torch.tensor([0], dtype=torch.int32),
+        num_k_exclude_rope: Tensor = None,
     ):
-        kwds = {}
-        if isinstance(self.cross_attn_image, RoPEAttention):
-            num_k_exclude_rope = torch.where(
-                num_k_exclude_rope > 0, num_k_exclude_rope, 0
-            )
-            kwds = {"num_k_exclude_rope": num_k_exclude_rope}
-
-        # if num_k_exclude_rope > 0:
-        #     assert isinstance(self.cross_attn_image, RoPEAttention)
-        #     kwds = {"num_k_exclude_rope": num_k_exclude_rope}
-
         # Cross-Attention
         tgt2 = self.norm2(tgt)
-        tgt2 = self.cross_attn_image(
-            q=tgt2 + query_pos if self.pos_enc_at_cross_attn_queries else tgt2,
-            k=memory + pos if self.pos_enc_at_cross_attn_keys else memory,
-            v=memory,
-            **kwds,
-        )
+        if isinstance(self.cross_attn_image, RoPEAttention):
+            tgt2 = self.cross_attn_image(
+                q=tgt2 + query_pos if self.pos_enc_at_cross_attn_queries else tgt2,
+                k=memory + pos if self.pos_enc_at_cross_attn_keys else memory,
+                v=memory,
+                num_k_exclude_rope=num_k_exclude_rope,
+            )
+        else:
+            tgt2 = self.cross_attn_image(
+                q=tgt2 + query_pos if self.pos_enc_at_cross_attn_queries else tgt2,
+                k=memory + pos if self.pos_enc_at_cross_attn_keys else memory,
+                v=memory,
+            )
         tgt = tgt + self.dropout2(tgt2)
         return tgt
 
@@ -133,7 +127,8 @@ class MemoryAttention(nn.Module):
         self.batch_first = batch_first
         # --- new ---
         self.backend_contexts: List[ModelExectuor] = []
-        self.inference_memory_attention = self.inference_memory_attention_torch
+        self.inference_memory_attention_exclude = self.inference_memory_attention_torch
+        self.inference_memory_attention_none = self.inference_memory_attention_torch
         self.set_runtime_backend(backend="torch")
 
     def set_runtime_backend(self, backend="torch", args: dict = None):
@@ -142,38 +137,122 @@ class MemoryAttention(nn.Module):
         """
         self.backend_contexts = []
         if backend.lower() == "torch":
-            self.inference_memory_attention = self.inference_memory_attention_torch
+            self.inference_memory_attention_exclude = (
+                self.inference_memory_attention_torch
+            )
+            self.inference_memory_attention_none = self.inference_memory_attention_torch
         elif backend.lower() == "onnxruntime":
-            self.inference_memory_attention = (
-                self.inference_memory_attention_onnxruntime
+            self.inference_memory_attention_exclude = (
+                self.inference_memory_attention_speedup_exclude
+            )
+            self.inference_memory_attention_none = (
+                self.inference_memory_attention_speedup_none
             )
             assert (
                 args and "model_paths" in args
             ), "The 'model_paths' argument is required to specify the ONNX model path"
 
-            model_path = args["model_paths"][0]
-            providers = args.get("providers", None)
-            executor = OnnxRuntimeExecutor(model_path, providers=providers)
+            from ytools.onnxruntime import OnnxRuntimeExecutor
 
+            model_none, model_exclude = args["model_paths"]
+            providers = args.get("providers", None)
+            executor_none = OnnxRuntimeExecutor(model_none, providers=providers)
+            executor_exclude = OnnxRuntimeExecutor(model_exclude, providers=providers)
+
+            # warmup
             curr_warmup = torch.randn(4096, 1, 256)
             curr_pos_warmup = torch.randn(4096, 1, 256)
-            num_obj_ptr_tokens_warmup = torch.tensor([64], dtype=torch.int32)
 
-            # 4100-28736
-            MIN_MEM_LEN = 4100
-            MAX_MEM_LEN = 28736
-
-            for mem_len in [MIN_MEM_LEN, MAX_MEM_LEN]:
+            for L in [1, 7]:
                 warmup_inputs = [
                     curr_warmup,
-                    torch.randn(mem_len, 1, 64),
+                    torch.randn(L, 4096, 1, 64),
                     curr_pos_warmup,
-                    torch.randn(mem_len, 1, 64),
-                    num_obj_ptr_tokens_warmup,
-                ]
-                executor.warmup(warmup_inputs)
+                    torch.randn(L, 4096, 1, 64),
+                    torch.randn(0, 1, 64),
+                    torch.randn(0, 1, 64),
+                ][
+                    : len(executor_none.GetModelInputDesc())
+                ]  # may remove last input while export onnx because it get no use
+                executor_none.warmup(warmup_inputs)
 
-            self.backend_contexts.append(executor)
+                warmup_inputs = [
+                    curr_warmup,
+                    torch.randn(L, 4096, 1, 64),
+                    curr_pos_warmup,
+                    torch.randn(L, 4096, 1, 64),
+                    torch.randn(64, 1, 64),
+                    torch.randn(64, 1, 64),
+                ]
+                executor_exclude.warmup(warmup_inputs)
+
+            self.backend_contexts.append(executor_none)
+            self.backend_contexts.append(executor_exclude)
+
+        elif backend.lower() in ["tensorrt", "trt"]:
+            assert (
+                "model_paths" in args
+            ), 'need args["model_paths"] to set *.engine path'
+
+            model_paths = args["model_paths"]
+            if isinstance(model_paths, str):
+                model_paths = [model_paths]
+
+            from ytools.tensorrt import TensorRTExecutor
+            # image_encoder
+            if model_paths[0] is None:
+                self.inference_memory_attention_exclude = (
+                    self.inference_memory_attention_torch
+                )
+                self.inference_memory_attention_none = (
+                    self.inference_memory_attention_torch
+                )
+            else:
+                self.inference_memory_attention_exclude = (
+                    self.inference_memory_attention_speedup_exclude
+                )
+                self.inference_memory_attention_none = (
+                    self.inference_memory_attention_speedup_none
+                )
+
+                model_none, model_exclude = args["model_paths"]
+                providers = args.get("providers", None)
+                executor_none = TensorRTExecutor(
+                    model_none, build_args=args.get("build_args", {})
+                )
+                executor_exclude = TensorRTExecutor(
+                    model_exclude, build_args=args.get("build_args", {})
+                )
+
+                # warmup
+                curr_warmup = torch.randn(4096, 1, 256)
+                curr_pos_warmup = torch.randn(4096, 1, 256)
+
+                for L in [1, 7]:
+                    warmup_inputs = [
+                        curr_warmup,
+                        torch.randn(L, 4096, 1, 64),
+                        curr_pos_warmup,
+                        torch.randn(L, 4096, 1, 64),
+                        torch.randn(0, 1, 64),
+                        torch.randn(0, 1, 64),
+                    ][
+                        : len(executor_none.GetModelInputDesc())
+                    ]  # may remove last input while export onnx because it get no use
+                    executor_none.warmup(warmup_inputs)
+
+                    warmup_inputs = [
+                        curr_warmup,
+                        torch.randn(L, 4096, 1, 64),
+                        curr_pos_warmup,
+                        torch.randn(L, 4096, 1, 64),
+                        torch.randn(64, 1, 64),
+                        torch.randn(64, 1, 64),
+                    ]
+                    executor_exclude.warmup(warmup_inputs)
+
+                self.backend_contexts.append(executor_none)
+                self.backend_contexts.append(executor_exclude)
         else:
             raise ValueError(f"Unsupported backend: {backend}")
 
@@ -197,23 +276,41 @@ class MemoryAttention(nn.Module):
             curr.shape[1] == memory.shape[1]
         ), "Batch size must be the same for curr and memory"
 
-        if not isinstance(num_obj_ptr_tokens, Tensor):
-            num_obj_ptr_tokens = torch.tensor([num_obj_ptr_tokens], dtype=torch.int32)
+        valid_len = memory.size(0) - num_obj_ptr_tokens
 
-        return self.inference_memory_attention(
-            curr, memory, curr_pos, memory_pos, num_obj_ptr_tokens
+        inputs = (
+            curr,
+            memory[:valid_len, ...].unflatten(0, (-1, curr.size(0))),
+            curr_pos,
+            memory_pos[:valid_len, ...].unflatten(0, (-1, curr.size(0))),
+            memory[valid_len:, ...],
+            memory_pos[valid_len:, ...],
         )
 
-    @test_torch_cuda_time()
-    # --- 4. 创建 Torch 实现 (原始 forward 逻辑) ---
+        if num_obj_ptr_tokens > 0:
+            return self.inference_memory_attention_exclude(*inputs)
+        else:
+            return self.inference_memory_attention_none(*inputs)
+
     def inference_memory_attention_torch(
         self,
         curr: torch.Tensor,
         memory: torch.Tensor,
         curr_pos: Optional[Tensor] = None,
         memory_pos: Optional[Tensor] = None,
-        num_obj_ptr_tokens: Tensor = torch.tensor([0], dtype=torch.float32),
-    ):
+        memory_exclude: Optional[Tensor] = None,
+        memory_pos_exclude: Optional[Tensor] = None,
+    ) -> Tensor:
+        memory = memory.flatten(0, 1)
+        memory_pos = memory_pos.flatten(0, 1)
+
+        if memory_exclude.size(0) > 0:
+            memory = torch.cat([memory, memory_exclude], dim=0)
+            memory_pos = torch.cat([memory_pos, memory_pos_exclude], dim=0)
+
+        num_k_exclude_rope = torch.tensor(
+            [memory_exclude.size(0)], dtype=torch.int32, device=memory.device
+        )
 
         output = curr
         if self.pos_enc_at_input and curr_pos is not None:
@@ -226,17 +323,19 @@ class MemoryAttention(nn.Module):
             memory_pos = memory_pos.transpose(0, 1)
 
         for layer in self.layers:
-            kwds = {}
             if isinstance(layer.cross_attn_image, RoPEAttention):
-                kwds = {"num_k_exclude_rope": num_obj_ptr_tokens.to(dtype=torch.int32)}
+                output = layer(
+                    tgt=output,
+                    memory=memory,
+                    pos=memory_pos,
+                    query_pos=curr_pos,
+                    num_k_exclude_rope=num_k_exclude_rope,
+                )
 
-            output = layer(
-                tgt=output,
-                memory=memory,
-                pos=memory_pos,
-                query_pos=curr_pos,
-                **kwds,
-            )
+            else:
+                output = layer(
+                    tgt=output, memory=memory, pos=memory_pos, query_pos=curr_pos
+                )
         normed_output = self.norm(output)
 
         if self.batch_first:
@@ -245,18 +344,34 @@ class MemoryAttention(nn.Module):
 
         return normed_output
 
-    @test_torch_cuda_time()
-    def inference_memory_attention_onnxruntime(
+    def inference_memory_attention_speedup_exclude(
         self,
         curr: torch.Tensor,
         memory: torch.Tensor,
         curr_pos: Optional[Tensor] = None,
         memory_pos: Optional[Tensor] = None,
-        num_obj_ptr_tokens: Tensor = torch.tensor([0], dtype=torch.int32),
-    ):
-        print(f"")
-        outputs = self.backend_contexts[0].Inference(
-            [curr, memory, curr_pos, memory_pos, num_obj_ptr_tokens],
+        memory_exclude: Optional[Tensor] = None,
+        memory_pos_exclude: Optional[Tensor] = None,
+    ) -> Tensor:
+        outs = self.backend_contexts[1].Inference(
+            [curr, memory, curr_pos, memory_pos, memory_exclude, memory_pos_exclude],
             output_type="torch",
         )
-        return outputs[0].to(curr.device)
+        return outs[0].to(memory.device)
+
+    def inference_memory_attention_speedup_none(
+        self,
+        curr: torch.Tensor,
+        memory: torch.Tensor,
+        curr_pos: Optional[Tensor] = None,
+        memory_pos: Optional[Tensor] = None,
+        memory_exclude: Optional[Tensor] = None,
+        memory_pos_exclude: Optional[Tensor] = None,
+    ) -> Tensor:
+        outs = self.backend_contexts[0].Inference(
+            [curr, memory, curr_pos, memory_pos, memory_exclude, memory_pos_exclude][
+                : len(self.backend_contexts[0].GetModelInputDesc())
+            ],
+            output_type="torch",
+        )
+        return outs[0].to(memory.device)

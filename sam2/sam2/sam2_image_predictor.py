@@ -15,10 +15,7 @@ from PIL.Image import Image
 from sam2.modeling.sam2_base import SAM2Base
 
 from sam2.utils.transforms import SAM2Transforms
-from ytools.bench import test_time
 from torch import nn
-from ytools.onnxruntime import OnnxRuntimeExecutor
-from ytools.tensorrt import TensorRTExecutor
 from ytools.executor import ModelExectuor
 
 
@@ -90,7 +87,47 @@ class SAM2ImagePredictor(nn.Module):
         sam_model = build_sam2_hf(model_id, **kwargs)
         return cls(sam_model, **kwargs)
 
-    @test_time()
+    def speedup(self, backend="tensorrt", use_cache=True):
+        """
+        only support for large model version
+
+        you can set backend with ["torch", "onnxruntime", "tensorrt"]
+
+        backend=="torch" means raw code
+        """
+        if backend in ["torch"]:
+            self.set_runtime_backend(backend="torch")
+        elif backend in ["onnxruntime", "ort", "onnxrt"]:
+            self.set_runtime_backend(
+                backend="onnxruntime",
+                args={
+                    "model_paths": [
+                        "models/set_image_e2e_opt.onnx",
+                    ],
+                    "providers": [
+                        "CUDAExecutionProvider",
+                        "CPUExecutionProvider",
+                    ],
+                },
+            )
+        elif backend in ["tensorrt", "trt"]:
+            self.set_runtime_backend(
+                backend="tensorrt",
+                args={
+                    "model_paths": [
+                        "models/set_image_e2e_opt.onnx",
+                    ],
+                    "build_args": {
+                        "dynamic_axes": {
+                            "image": {"min": {0: 1}, "opt": {0: 1}, "max": {0: 1}}
+                        },
+                        "use_cache": use_cache,
+                    },
+                },
+            )
+        else:
+            raise f"Unknown backend={backend}"
+
     @torch.no_grad()
     def set_image(
         self,
@@ -162,6 +199,7 @@ class SAM2ImagePredictor(nn.Module):
         elif backend.lower() in ["onnxruntime", "ort", "onnxrt"]:
             assert "model_paths" in args, 'need args["model_paths"] to set *.onnx path'
 
+            from ytools.onnxruntime import OnnxRuntimeExecutor
             model_paths = args["model_paths"]
             if isinstance(model_paths, str):
                 model_paths = [model_paths]
@@ -179,7 +217,8 @@ class SAM2ImagePredictor(nn.Module):
             assert (
                 "model_paths" in args
             ), 'need args["model_paths"] to set *.engine path'
-
+            from ytools.tensorrt import TensorRTExecutor
+            
             model_paths = args["model_paths"]
             if isinstance(model_paths, str):
                 model_paths = [model_paths]

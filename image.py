@@ -67,18 +67,7 @@ model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
 sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
 predictor = SAM2ImagePredictor(sam2_model)
-
-predictor.set_runtime_backend(
-    backend="tensorrt",
-    args={
-        "model_paths": [
-            "models/set_image_e2e_opt.onnx",
-        ],
-        "build_args": {
-            "dynamic_axes": {"image": {"min": {0: 1}, "opt": {0: 1}, "max": {0: 1}}}
-        },
-    },
-)
+# predictor.speedup()
 
 image = Image.open("./sam2/notebooks/images/truck.jpg")
 image = np.array(image.convert("RGB"))

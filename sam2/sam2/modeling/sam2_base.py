@@ -14,10 +14,7 @@ from sam2.modeling.sam.mask_decoder import MaskDecoder
 from sam2.modeling.sam.prompt_encoder import PromptEncoder
 from sam2.modeling.sam.transformer import TwoWayTransformer
 from sam2.modeling.sam2_utils import get_1d_sine_pe, MLP, select_closest_cond_frames
-from ytools.bench import test_torch_cuda_time
-from ytools.onnxruntime import OnnxRuntimeExecutor
 from ytools.executor import ModelExectuor
-from ytools.tensorrt import TensorRTExecutor
 from typing import List
 
 # a large negative value as a placeholder score for missing objects
@@ -204,12 +201,39 @@ class SAM2Base(torch.nn.Module):
 
         self.set_runtime_backend(backend="torch")
 
+    def speedup_extern(self):
+        pass
+        # if self.memory_attention is not None:
+        #     import torch_tensorrt
+
+        #     ori_forward = self.memory_attention.forward
+        #     self.memory_attention.forward = self.memory_attention.inference_memory_attention_torch
+
+        #     self.memory_attention_ = torch.compile(
+        #         self.memory_attention,
+        #         backend="torch_tensorrt",
+        #         fullgraph=True,
+        #         dynamic=True,
+        #         options={
+        #             "truncate_long_and_double": True,
+        #             "precision": torch.half,
+        #             "min_block_size": 2,
+        #             "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
+        #             "optimization_level": 4,
+        #             "use_python_runtime": False,
+        #         },
+        #     )
+            
+        #     self.memory_attention.inference_memory_attention_torch = self.memory_attention_.forward
+        #     self.memory_attention.forward = ori_forward
+
     def set_runtime_backend(self, backend="torch", args: dict = None):
         self.backend_contexts = []
         if backend.lower() == "torch":
             self.inference_image = self.inference_image_torch
         elif backend.lower() in ["onnxruntime", "ort", "onnxrt"]:
             assert "model_paths" in args, 'need args["model_paths"] to set *.onnx path'
+            from ytools.onnxruntime import OnnxRuntimeExecutor
 
             model_paths = args["model_paths"]
             if isinstance(model_paths, str):
@@ -229,7 +253,7 @@ class SAM2Base(torch.nn.Module):
             assert (
                 "model_paths" in args
             ), 'need args["model_paths"] to set *.engine path'
-
+            from ytools.tensorrt import TensorRTExecutor
             model_paths = args["model_paths"]
             if isinstance(model_paths, str):
                 model_paths = [model_paths]
@@ -535,7 +559,6 @@ class SAM2Base(torch.nn.Module):
         }
         return backbone_out
 
-    @test_torch_cuda_time()
     def inference_image_torch(self, img_batch: torch.Tensor):
         """
         torch version call by self.forward_image
@@ -554,7 +577,6 @@ class SAM2Base(torch.nn.Module):
             *backbone_out["backbone_fpn"],
         )
 
-    @test_torch_cuda_time()
     def inference_image_onnxruntime(self, img_batch: torch.Tensor):
         """
         onnxruntime version call by self.forward_image
@@ -935,13 +957,6 @@ class SAM2Base(torch.nn.Module):
             to_cat_memory_pos_embed = [self.no_mem_pos_enc.expand(1, B, self.mem_dim)]
 
         # Step 2: Concatenate the memories and forward through the transformer encoder
-        print(f"@@@ shape")
-        for t in to_cat_memory:
-            print(f"@to_cat_memory {t.shape}")
-            
-        for t in to_cat_memory_pos_embed:
-            print(f"@to_cat_memory_pos_embed {t.shape}")
-
         memory = torch.cat(to_cat_memory, dim=0)
         memory_pos_embed = torch.cat(to_cat_memory_pos_embed, dim=0)
 

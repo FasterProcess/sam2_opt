@@ -38,6 +38,98 @@ class SAM2VideoPredictor(SAM2Base):
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
         self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
 
+    def speedup(self, backend="tensorrt", use_cache=True):
+        """
+        only support for large model version
+
+        you can set backend with ["torch", "onnxruntime", "tensorrt"]
+
+        backend=="torch" means raw code
+        """
+        if backend in ["torch"]:
+            self.set_runtime_backend(backend="torch")
+        elif backend in ["onnxruntime", "ort", "onnxrt"]:
+            self.set_runtime_backend(
+                backend="onnxruntime",
+                args={
+                    "model_paths": [
+                        "models/forward_image_opt.onnx",
+                    ],
+                    "providers": [
+                        "CUDAExecutionProvider",
+                        "CPUExecutionProvider",
+                    ],
+                },
+            )
+
+            self.memory_attention.set_runtime_backend(
+                backend="onnxruntime",
+                args={
+                    "model_paths": [
+                        "models/memory_attention_none_opt.onnx",
+                        "models/memory_attention_exclude_opt.onnx",
+                    ],
+                    "providers": [
+                        "CUDAExecutionProvider",
+                        "CPUExecutionProvider",
+                    ],
+                },
+            )
+        elif backend in ["tensorrt", "trt"]:
+            self.set_runtime_backend(
+                backend="tensorrt",
+                args={
+                    "model_paths": [
+                        "models/forward_image_opt.onnx",
+                    ],
+                    "build_args": {
+                        "dynamic_axes": {
+                            "image": {"min": {0: 1}, "opt": {0: 1}, "max": {0: 1}}
+                        },
+                        "use_cache": True,
+                    },
+                },
+            )
+
+            self.memory_attention.set_runtime_backend(
+                backend="tensorrt",
+                args={
+                    "model_paths": [
+                        "models/memory_attention_none_opt.onnx",
+                        "models/memory_attention_exclude_opt.onnx",
+                    ],
+                    "build_args": {
+                        "dynamic_axes": {
+                            "curr": {"min": {1: 1}, "opt": {1: 1}, "max": {1: 1}},
+                            "memory": {
+                                "min": {0: 1, 2: 1},
+                                "opt": {0: 7, 2: 1},
+                                "max": {0: 7, 2: 1},
+                            },
+                            "curr_pos": {"min": {1: 1}, "opt": {1: 1}, "max": {1: 1}},
+                            "memory_pos": {
+                                "min": {0: 1, 2: 1},
+                                "opt": {0: 7, 2: 1},
+                                "max": {0: 7, 2: 1},
+                            },
+                            "memory_exclude": {
+                                "min": {0: 1, 1: 1},
+                                "opt": {0: 64, 1: 1},
+                                "max": {0: 64, 1: 1},
+                            },
+                            "memory_pos_exclude": {
+                                "min": {0: 1, 1: 1},
+                                "opt": {0: 64, 1: 1},
+                                "max": {0: 64, 1: 1},
+                            },
+                        },
+                        "use_cache": use_cache,
+                    },
+                },
+            )
+        else:
+            raise f"Unknown backend={backend}"
+
     @torch.inference_mode()
     def init_state(
         self,

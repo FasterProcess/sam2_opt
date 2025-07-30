@@ -10,7 +10,6 @@ import torch
 from torch import nn
 
 from sam2.modeling.sam2_utils import LayerNorm2d, MLP
-from ytools.bench import test_torch_cuda_time
 from ytools.onnxruntime import OnnxRuntimeExecutor
 from ytools.executor import ModelExectuor
 
@@ -256,7 +255,6 @@ class MaskDecoder(nn.Module):
         else:
             raise Exception(f"unsupported")
 
-    @test_torch_cuda_time()
     def inference_predict_masks_torch(
         self,
         src: torch.Tensor,
@@ -313,7 +311,6 @@ class MaskDecoder(nn.Module):
 
         return masks, iou_pred, mask_tokens_out, object_score_logits
 
-    @test_torch_cuda_time()
     def inference_predict_masks_onnxruntime(
         self,
         src: torch.Tensor,

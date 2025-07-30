@@ -13,7 +13,6 @@ from sam2.modeling.position_encoding import PositionEmbeddingRandom
 
 from sam2.modeling.sam2_utils import LayerNorm2d
 
-from ytools.bench import test_torch_cuda_time
 from ytools.executor import ModelExectuor
 from ytools.onnxruntime import OnnxRuntimeExecutor
 
@@ -208,7 +207,6 @@ class PromptEncoder(nn.Module):
        
 
 # --- Added: PyTorch version of the core logic ---
-    @test_torch_cuda_time()
     def inference_prompt_torch(self, points, boxes, masks) -> Tuple[torch.Tensor, torch.Tensor]:
         bs = self._get_batch_size(points, boxes, masks)
         sparse_embeddings = torch.empty((bs, 0, self.embed_dim), device=self._get_device())
@@ -227,8 +225,6 @@ class PromptEncoder(nn.Module):
                                                                                      self.image_embedding_size[1])
         return sparse_embeddings, dense_embeddings
 
-
-    @test_torch_cuda_time()
     def inference_prompt_onnxruntime(self, points, boxes, masks) -> Tuple[torch.Tensor, torch.Tensor]:
         assert boxes is None, "ONNX backend for PromptEncoder does not support 'boxes' directly. Convert them to points."
         assert masks is None, "ONNX backend for PromptEncoder does not support 'masks' directly. It's designed for point prompts."

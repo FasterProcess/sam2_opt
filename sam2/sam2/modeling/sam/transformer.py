@@ -20,6 +20,7 @@ from sam2.modeling.position_encoding_fix import (
 )
 from sam2.modeling.sam2_utils import MLP
 from sam2.utils.misc import get_sdpa_settings
+import os
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 # Check whether Flash Attention is available (and use it by default)
@@ -314,8 +315,16 @@ class RoPEAttention(Attention):
         #     self.max_seq, device="cpu", dtype=torch.float32
         # )
 
+        self.cos, self.sin = None, None
+
+        seq_len = int(os.environ.get("EXPORT_ONNX_SEQ_LEN", 0))
+        if seq_len > 0:
+            self.init_cos_sin(seq_len, device="cuda", dtype=torch.float32)
+
+    def init_cos_sin(self, seq_len, device, dtype):
+        self.cos, self.sin = self.get_cos_sin(seq_len, device, dtype)
+
     def get_cos_sin(self, seq_len, device, dtype):
-        # # 缓存
         if self._cached_shape == (seq_len, device, dtype):
             return self._cached_cos_sin
         w = int(math.sqrt(seq_len))
@@ -338,10 +347,10 @@ class RoPEAttention(Attention):
         q: Tensor,
         k: Tensor,
         v: Tensor,
-        num_k_exclude_rope: Tensor = torch.tensor([0], dtype=torch.int64),
+        num_k_exclude_rope: Tensor = None,
     ) -> Tensor:
         if num_k_exclude_rope is None:
-            num_k_exclude_rope = torch.tensor([0], dtype=torch.int64)
+            num_k_exclude_rope = torch.tensor([0], dtype=torch.int32, device=k.device)
 
         assert isinstance(
             num_k_exclude_rope, Tensor
@@ -356,13 +365,6 @@ class RoPEAttention(Attention):
 
         seq_len = q.size(-2)
         cos, sin = self.get_cos_sin(seq_len, q.device, q.dtype)
-        # cos = self.freq_cos[: q.size(-2), ...].to(device=q.device, dtype=q.dtype)
-        # sin = self.freq_sin[: q.size(-2), ...].to(device=q.device, dtype=q.dtype)
-
-        # self.freq_cos = self.freq_cos.to(device=q.device, dtype=q.dtype)
-        # self.freq_sin = self.freq_sin.to(device=q.device, dtype=q.dtype)
-
-        # cos, sin = self.freq_cos, self.freq_sin
 
         # q: [B, n_head, seq_len, head_dim]
         q = apply_rotary_emb(q, cos, sin)
@@ -378,24 +380,42 @@ class RoPEAttention(Attention):
         cos_k = cos.repeat(k.size(-2) // q.size(-2), 1)
         sin_k = sin.repeat(k.size(-2) // q.size(-2), 1)
 
-        num_k_rope = torch.where(
-            num_k_exclude_rope > 0, k.size(-2) - num_k_exclude_rope, k.size(-2)
-        )
+        # num_k_rope = torch.where(
+        #     num_k_exclude_rope > 0, k.size(-2) - num_k_exclude_rope, k.size(-2)
+        # ).to(torch.int32)
 
-        k_rope = apply_rotary_emb(
-            k[:, :, :num_k_rope, ...], cos_k[:num_k_rope], sin_k[:num_k_rope]
-        )
-        k = torch.cat([k_rope, k[:, :, num_k_rope:, ...]], dim=-2)
+        # k_rope = apply_rotary_emb(
+        #     k[:, :, :num_k_rope, ...], cos_k[:num_k_rope], sin_k[:num_k_rope]
+        # )
+        # k = torch.cat([k_rope, k[:, :, num_k_rope:, ...]], dim=-2)
 
-        # num_k_rope = k.size(-2) - num_k_exclude_rope
-
-        # if num_k_exclude_rope > 0:
-        #     k_rope = apply_rotary_emb(
-        #         k[:, :, :num_k_rope], cos_k[:num_k_rope], sin_k[:num_k_rope]
+        num_k_rope = (k.size(-2) - num_k_exclude_rope).to(dtype=torch.int64)
+        # k = torch.cat(
+        #         [
+        #             apply_rotary_emb(
+        #                 k[:, :, :num_k_rope, :],
+        #                 cos_k[:num_k_rope, :],
+        #                 sin_k[:num_k_rope, :],
+        #             ),
+        #             k[:, :, num_k_rope:, :],
+        #         ],
+        #         dim=-2,
         #     )
-        #     k = torch.cat([k_rope, k[:, :, num_k_rope:]], dim=-2)
-        # else:
-        #     k = apply_rotary_emb(k, cos_k, sin_k)
+
+        if num_k_exclude_rope.item() > 0:
+            k = torch.cat(
+                [
+                    apply_rotary_emb(
+                        k[:, :, :num_k_rope, :],
+                        cos_k[:num_k_rope, :],
+                        sin_k[:num_k_rope, :],
+                    ),
+                    k[:, :, num_k_rope:, :],
+                ],
+                dim=-2,
+            )
+        else:
+            k = apply_rotary_emb(k, cos_k, sin_k)
 
         dropout_p = self.dropout_p if self.training else 0.0
         out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)

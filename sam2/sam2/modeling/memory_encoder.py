@@ -13,9 +13,7 @@ import torch.nn.functional as F
 
 from sam2.modeling.sam2_utils import DropPath, get_clones, LayerNorm2d
 
-from ytools.bench import test_torch_cuda_time
 from ytools.executor import ModelExectuor
-from ytools.onnxruntime import OnnxRuntimeExecutor
 
 
 class MaskDownSampler(nn.Module):
@@ -178,18 +176,30 @@ class MemoryEncoder(nn.Module):
             self.inference_memory = self.inference_memory_torch
         elif backend.lower() == "onnxruntime":
             self.inference_memory = self.inference_memory_onnxruntime
-            assert args and "model_paths" in args, "The 'model_paths' argument is required to specify the ONNX model path"
+            assert (
+                args and "model_paths" in args
+            ), "The 'model_paths' argument is required to specify the ONNX model path"
 
+            from ytools.onnxruntime import OnnxRuntimeExecutor
             model_path = args["model_paths"][0]
             providers = args.get("providers", None)
             executor = OnnxRuntimeExecutor(model_path, providers=providers)
 
             print(f"Warming up ONNX Runtime for MemoryEncoder ({model_path})...")
             try:
-                warmup_device = torch.device("cuda" if torch.cuda.is_available() and "CUDAExecutionProvider" in (
-                            providers or ["CUDAExecutionProvider"]) else "cpu")
-                pixel_features_warmup = torch.randn(1, 256, 64, 64, device=warmup_device)
-                mask_for_memory_warmup = torch.rand(1, 1, 1024, 1024, device=warmup_device)
+                warmup_device = torch.device(
+                    "cuda"
+                    if torch.cuda.is_available()
+                    and "CUDAExecutionProvider"
+                    in (providers or ["CUDAExecutionProvider"])
+                    else "cpu"
+                )
+                pixel_features_warmup = torch.randn(
+                    1, 256, 64, 64, device=warmup_device
+                )
+                mask_for_memory_warmup = torch.rand(
+                    1, 1, 1024, 1024, device=warmup_device
+                )
                 warmup_inputs = [pixel_features_warmup, mask_for_memory_warmup]
                 executor.warmup(warmup_inputs)
                 print("MemoryEncoder warmup successful.")
@@ -211,12 +221,11 @@ class MemoryEncoder(nn.Module):
         if not skip_mask_sigmoid:
             masks = F.sigmoid(masks)
 
-        x,pos = self.inference_memory(pix_feat, masks)
+        x, pos = self.inference_memory(pix_feat, masks)
 
         return {"vision_features": x, "vision_pos_enc": [pos]}
 
     # --- Added: PyTorch version of the core logic ---
-    @test_torch_cuda_time()
     def inference_memory_torch(self, pix_feat: torch.Tensor, masks: torch.Tensor):
         masks_embedded = self.mask_downsampler(masks)
         pix_feat_processed = pix_feat.to(masks_embedded.device)
@@ -228,7 +237,6 @@ class MemoryEncoder(nn.Module):
         return x, pos
 
     # --- Added: ONNX version of the core logic ---
-    @test_torch_cuda_time()
     def inference_memory_onnxruntime(self, pix_feat: torch.Tensor, masks: torch.Tensor):
         inputs = [pix_feat, masks]
         executor = self.backend_contexts[0]
