@@ -48,3 +48,11 @@ predictor.speedup()     # After initializing the predictor, simply insert one li
 
 # predictor.speedup("torch")        # reset to raw version, which support other model version, such as tiny
 ```
+
+# how to compatible with sam2-lib
+
+```python
+# add below code to your first run-line
+import sys
+sys.path.insert(0, "sam2")
+```
