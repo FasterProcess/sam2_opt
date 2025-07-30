@@ -17,6 +17,11 @@ chmod +x download_opt.sh
 ## image predictor
 
 ```python
+import sys
+sys.path.insert(0, "sam2")
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+
 # only support large version
 sam2_checkpoint = "./sam2/checkpoints/sam2.1_hiera_large.pt"
 model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
@@ -34,6 +39,11 @@ predictor.speedup()     # After initializing the predictor, simply insert one li
 ## Video predictor
 
 ```python
+import sys
+sys.path.insert(0, "sam2")
+from sam2.sam2_video_predictor import SAM2VideoPredictor
+from sam2.build_sam import build_sam2_video_predictor
+
 # only support large version
 sam2_checkpoint = "./sam2/checkpoints/sam2.1_hiera_large.pt"
 model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
@@ -49,7 +59,7 @@ predictor.speedup()     # After initializing the predictor, simply insert one li
 # predictor.speedup("torch")        # reset to raw version, which support other model version, such as tiny
 ```
 
-# how to compatible with sam2-lib
+# how to compatible with sam2 installed by pip
 
 ```python
 # add below code to your first run-line
