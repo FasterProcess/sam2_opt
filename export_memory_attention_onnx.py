@@ -14,7 +14,6 @@ import numpy as np
 from torch import nn
 import os
 import onnx
-from onnxconverter_common import float16
 
 device = torch.device("cuda")
 onnx_path = "models"

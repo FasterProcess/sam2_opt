@@ -106,7 +106,7 @@ if __name__ == "__main__":
         model_cfg, sam2_checkpoint, device=device
     )  # type:SAM2VideoPredictor
 
-    predictor.speedup("trt")
+    predictor.speedup()
 
     # Option B: ONNX Runtime backend
     # print("\n--- Using ONNX Runtime backend ---")

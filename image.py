@@ -67,7 +67,7 @@ model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
 sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
 predictor = SAM2ImagePredictor(sam2_model)
-# predictor.speedup()
+predictor.speedup()
 
 image = Image.open("./sam2/notebooks/images/truck.jpg")
 image = np.array(image.convert("RGB"))
