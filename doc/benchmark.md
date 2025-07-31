@@ -63,3 +63,10 @@
 | torch       | Large    | 0.142     | 1.0    | 否       |
 | onnxruntime | Large    | 0.111     | 1.279  | 否       |
 | tensorrt    | Large    | 0.028     | 5.071  | fp16     |
+
+## SA-V test on RTX4090
+| 推理方式    | 模型类型 | J&F | J | F |
+| ----------- | -------- | --------- | ------ | -------- |
+| torch       | tiny     | 69.9      | 64.4   | 75.5     |
+| torch       | Large    | 72.6      | 66.8   | 78.4     |
+| tensorrt    | Large    | 72.5      | 66.7   | 78.3     |
