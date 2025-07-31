@@ -1,7 +1,7 @@
 data
 models
 *.onnx
-.vscode/
+.vscode
 .DS_Store
 test
 datasets
