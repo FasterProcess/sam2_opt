@@ -35,8 +35,6 @@ predictor.speedup()     # After initializing the predictor, simply insert one li
 # use predictor like raw version
 
 # predictor.speedup("torch")        # reset to raw version, which support other model version, such as tiny
-
-predictor.release()
 ```
 
 ## Video predictor
@@ -61,8 +59,6 @@ predictor.speedup()     # After initializing the predictor, simply insert one li
 # use predictor like raw version
 
 # predictor.speedup("torch")        # reset to raw version, which support other model version, such as tiny
-
-predictor.release()
 ```
 
 # how to compatible with sam2 installed by pip
