@@ -224,6 +224,10 @@ class MaskDecoder(nn.Module):
         )
 
     def set_runtime_backend(self, backend="torch", args: dict = None):
+        if self.backend_contexts is not None:
+            for context in self.backend_contexts:
+                context.Release()
+                
         self.backend_contexts = []
         if backend.lower() == "torch":
             self.inference_predict_masks = self.inference_predict_masks_torch

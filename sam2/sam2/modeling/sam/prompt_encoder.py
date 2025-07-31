@@ -75,6 +75,10 @@ class PromptEncoder(nn.Module):
         """
         Dynamically sets the runtime backend for the PromptEncoder (torch or onnxruntime).
         """
+        if self.backend_contexts is not None:
+            for context in self.backend_contexts:
+                context.Release()
+                
         self.backend_contexts = []
         if backend.lower() == "torch":
             self.inference_prompt = self.inference_prompt_torch

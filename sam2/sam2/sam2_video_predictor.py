@@ -39,6 +39,9 @@ class SAM2VideoPredictor(SAM2Base):
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
         self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
 
+    def release(self):
+        self.speedup("torch")
+
     def speedup(self, backend="tensorrt", use_cache=True, model_root_path=None):
         """
         only support for large model version
@@ -54,6 +57,7 @@ class SAM2VideoPredictor(SAM2Base):
 
         if backend in ["torch"]:
             self.set_runtime_backend(backend="torch")
+            self.memory_attention.set_runtime_backend(backend="torch")
         elif backend in ["onnxruntime", "ort", "onnxrt"]:
             self.set_runtime_backend(
                 backend="onnxruntime",

@@ -72,3 +72,5 @@ while cap.isOpened():
     )
     frame_idx += 1
 cap.release()
+
+predictor.release()

@@ -88,6 +88,9 @@ class SAM2ImagePredictor(nn.Module):
         sam_model = build_sam2_hf(model_id, **kwargs)
         return cls(sam_model, **kwargs)
 
+    def release(self):
+        self.speedup("torch")
+
     def speedup(self, backend="tensorrt", use_cache=True, model_root_path=None):
         """
         only support for large model version
@@ -199,6 +202,10 @@ class SAM2ImagePredictor(nn.Module):
         logging.info("Image embeddings computed.")
 
     def set_runtime_backend(self, backend="torch", args: dict = None):
+        if self.backend_contexts is not None:
+            for context in self.backend_contexts:
+                context.Release()
+
         self.backend_contexts = []
         if backend.lower() == "torch":
             self.set_image_e2e = self.set_image_e2e_torch
