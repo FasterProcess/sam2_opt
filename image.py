@@ -39,4 +39,4 @@ logits = logits[sorted_ind]
 
 save_masks(image, masks[0:1], deal_func=gen_image_writer("data/test_image"))
 
-predictor.release()
+# predictor.release()
