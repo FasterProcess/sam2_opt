@@ -10,7 +10,6 @@ import torch
 from torch import nn
 
 from sam2.modeling.sam2_utils import LayerNorm2d, MLP
-from ytools.onnxruntime import OnnxRuntimeExecutor
 from ytools.executor import ModelExectuor
 
 
@@ -235,6 +234,7 @@ class MaskDecoder(nn.Module):
             if isinstance(model_paths, str):
                 model_paths = [model_paths, None]
 
+            from ytools.onnxruntime import OnnxRuntimeExecutor
             if model_paths[0] is None:
                 self.inference_predict_masks = self.inference_predict_masks_torch
             else:

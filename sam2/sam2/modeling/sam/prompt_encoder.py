@@ -14,7 +14,6 @@ from sam2.modeling.position_encoding import PositionEmbeddingRandom
 from sam2.modeling.sam2_utils import LayerNorm2d
 
 from ytools.executor import ModelExectuor
-from ytools.onnxruntime import OnnxRuntimeExecutor
 
 
 class PromptEncoder(nn.Module):
@@ -83,6 +82,8 @@ class PromptEncoder(nn.Module):
             self.inference_prompt = self.inference_prompt_onnxruntime
             assert args and "model_paths" in args, "The 'model_paths' argument is required to specify the ONNX model path"
 
+            from ytools.onnxruntime import OnnxRuntimeExecutor
+            
             model_path = args["model_paths"][0]  # PromptEncoder only needs one model
             providers = args.get("providers", None)
             executor = OnnxRuntimeExecutor(model_path, providers=providers)
