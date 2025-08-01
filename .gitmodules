@@ -1,3 +1,6 @@
 [submodule "ytools"]
 	path = ytools
 	url = git@github.com:oneflyingfish/torch_trt_utils.git
+[submodule "sam2/ytools"]
+	path = sam2/ytools
+	url = git@github.com:oneflyingfish/torch_trt_utils.git
