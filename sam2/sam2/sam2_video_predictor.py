@@ -9,6 +9,10 @@ if version in ["dam4sam", "dam4sam2"]:
 # elif version in ["grounded", "grounded_sam", "groundedsam2"]:
 #     from .sam2_video_predictor_grounded import *
 
-else: 
-    print(f"[sam2_base.py] INFO: Importing from .sam2_base_official (default)", file=sys.stderr)
+else:
+    if int(os.environ.get("SAM2_DEBUG", 0)) > 0:
+        print(
+            f"[sam2_base.py] INFO: Importing from .sam2_base_official [default]",
+            file=sys.stderr,
+        )
     from .sam2_video_predictor_official import *

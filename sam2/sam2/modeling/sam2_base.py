@@ -12,5 +12,6 @@ if version in ["dam4sam", "dam4sam2"]:
 #     from .sam2_base_grounded import *
 
 else: 
-    print(f"[sam2_base.py] INFO: Importing from .sam2_base_official (default)", file=sys.stderr)
+    if int(os.environ.get("SAM2_DEBUG", 0)) > 0:
+        print(f"[sam2_base.py] INFO: Importing from .sam2_base_official (default)", file=sys.stderr)
     from .sam2_base_official import *
